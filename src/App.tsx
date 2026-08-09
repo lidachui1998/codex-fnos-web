@@ -1,5 +1,5 @@
 import { ArrowDownToLine, ArrowUpToLine, Bot, Code2, FileText, Folder, FolderMinus, Image, Menu, MessageSquarePlus, PanelLeft, PanelLeftClose, PanelLeftOpen, Paperclip, Plus, Search, Send, Settings, ShieldCheck, Sparkles, Square, Trash2, Wifi, WifiOff, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent } from "react";
 import { api, ApiError, connectEvents } from "./api";
 import { createClientId } from "./client-id";
 import { ApprovalCard } from "./components/ApprovalCard";
@@ -7,10 +7,11 @@ import { LoginScreen } from "./components/LoginScreen";
 import { ModelPicker } from "./components/ModelPicker";
 import { ProjectDialog } from "./components/ProjectDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { findSkillMention, matchingSkills, SkillMentionMenu, type SkillMention } from "./components/SkillMentionMenu";
 import { SkillsDialog } from "./components/SkillsDialog";
 import { Timeline } from "./components/Timeline";
 import { WorkspacePanel } from "./components/WorkspacePanel";
-import type { AppEvent, ApprovalPolicy, Bootstrap, Project, ReasoningEffort, Skill, Thread, ThreadItem } from "./types";
+import type { AppEvent, ApprovalPolicy, Bootstrap, Project, ReasoningEffort, Skill, SkillsResult, Thread, ThreadItem } from "./types";
 
 function upsertItem(items: ThreadItem[], next: ThreadItem) {
   const index = items.findIndex((item) => item.id === next.id);
@@ -75,6 +76,11 @@ export default function App() {
   const [selectedEffort, setSelectedEffort] = useState<ReasoningEffort | "">("");
   const [selectedApprovalPolicy, setSelectedApprovalPolicy] = useState<ApprovalPolicy>("on-request");
   const [selectedSkills, setSelectedSkills] = useState<Skill[]>([]);
+  const [availableSkills, setAvailableSkills] = useState<Skill[]>([]);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [skillsError, setSkillsError] = useState("");
+  const [skillMention, setSkillMention] = useState<SkillMention | null>(null);
+  const [skillMentionIndex, setSkillMentionIndex] = useState(0);
   const [threads, setThreads] = useState<Thread[]>([]);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [items, setItems] = useState<ThreadItem[]>([]);
@@ -104,20 +110,52 @@ export default function App() {
   const optimisticUserItemId = useRef<string | null>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const forceLatestOnOpenRef = useRef(false);
 
   const selectedProject = bootstrap?.projects.find((project) => project.id === selectedProjectId) ?? null;
   const selectedThread = threads.find((thread) => thread.id === selectedThreadId) ?? null;
   const visibleThreads = threads.filter((thread) => threadTitle(thread).toLowerCase().includes(threadSearch.toLowerCase()));
   const eventsEnabled = authMode === "authenticated" && bootstrap !== null;
+  const mentionSkills = useMemo(
+    () => matchingSkills(availableSkills, skillMention?.query ?? "", selectedSkills),
+    [availableSkills, selectedSkills, skillMention?.query],
+  );
 
   useEffect(() => { selectedThreadRef.current = selectedThreadId; }, [selectedThreadId]);
 
   useEffect(() => {
     setSelectedApprovalPolicy(bootstrap?.settings.approvalPolicy ?? "on-request");
     setSelectedSkills([]);
+    setSkillMention(null);
     setWorkspaceFileRequest(null);
   }, [selectedProjectId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedProject || bootstrap?.bridge.status !== "ready") {
+      setAvailableSkills([]);
+      setSkillsError("");
+      return;
+    }
+    setSkillsLoading(true);
+    setSkillsError("");
+    api<SkillsResult>(`/api/projects/${selectedProject.id}/skills${skillsRevision > 0 ? "?reload=1" : ""}`)
+      .then((result) => {
+        if (cancelled) return;
+        const enabled = result.skills.filter((skill) => skill.enabled);
+        const enabledPaths = new Set(enabled.map((skill) => skill.path));
+        setAvailableSkills(enabled);
+        setSelectedSkills((current) => current.filter((skill) => enabledPaths.has(skill.path)));
+      })
+      .catch((reason) => {
+        if (!cancelled) setSkillsError(reason instanceof Error ? reason.message : "Skills 读取失败");
+      })
+      .finally(() => {
+        if (!cancelled) setSkillsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [bootstrap?.bridge.status, selectedProject?.id, skillsRevision]);
 
   useEffect(() => {
     const projectId = selectedProject?.id ?? null;
@@ -389,6 +427,77 @@ export default function App() {
     setWorkspacePanel(true);
   }
 
+  function updateSkillMention(value: string, cursor: number) {
+    const next = findSkillMention(value, cursor);
+    setSkillMentionIndex((current) => next?.query === skillMention?.query ? current : 0);
+    setSkillMention(next);
+  }
+
+  function handleComposerChange(event: ChangeEvent<HTMLTextAreaElement>) {
+    const value = event.currentTarget.value;
+    setComposer(value);
+    updateSkillMention(value, event.currentTarget.selectionStart);
+  }
+
+  function selectMentionSkill(skill: Skill) {
+    if (!skillMention || selectedSkills.length >= 6) return;
+    const nextComposer = `${composer.slice(0, skillMention.start)}${composer.slice(skillMention.end)}`;
+    const nextCursor = skillMention.start;
+    setComposer(nextComposer);
+    setSelectedSkills((current) => current.some((item) => item.path === skill.path) ? current : [...current, skill]);
+    setSkillMention(null);
+    requestAnimationFrame(() => {
+      composerRef.current?.focus();
+      composerRef.current?.setSelectionRange(nextCursor, nextCursor);
+    });
+  }
+
+  function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.nativeEvent.isComposing) return;
+    if (skillMention) {
+      if (event.key === "ArrowDown" && mentionSkills.length > 0) {
+        event.preventDefault();
+        setSkillMentionIndex((current) => (current + 1) % mentionSkills.length);
+        return;
+      }
+      if (event.key === "ArrowUp" && mentionSkills.length > 0) {
+        event.preventDefault();
+        setSkillMentionIndex((current) => (current - 1 + mentionSkills.length) % mentionSkills.length);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSkillMention(null);
+        return;
+      }
+      if ((event.key === "Enter" || event.key === "Tab") && mentionSkills[skillMentionIndex]) {
+        event.preventDefault();
+        selectMentionSkill(mentionSkills[skillMentionIndex]);
+        return;
+      }
+      if (event.key === "Enter" && skillsLoading) {
+        event.preventDefault();
+        return;
+      }
+    }
+    if (event.key === "Backspace" && composer.length === 0 && selectedSkills.length > 0) {
+      event.preventDefault();
+      setSelectedSkills((current) => current.slice(0, -1));
+      return;
+    }
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void sendMessage();
+    }
+  }
+
+  function updateAvailableSkills(skills: Skill[]) {
+    const enabled = skills.filter((skill) => skill.enabled);
+    const enabledPaths = new Set(enabled.map((skill) => skill.path));
+    setAvailableSkills(enabled);
+    setSelectedSkills((current) => current.filter((skill) => enabledPaths.has(skill.path)));
+  }
+
   async function openThread(thread: Thread) {
     setSelectedThreadId(thread.id);
     setMobileThreads(false);
@@ -640,7 +749,7 @@ export default function App() {
               onChanged={loadBootstrap}
               onAdvancedSettings={() => setSettingsDialog(true)}
             />
-            <button className={`icon-button ${selectedSkills.length > 0 ? "active-tool" : ""}`} disabled={!selectedProject} title="Skills 管理与选择" aria-label="Skills 管理与选择" onClick={() => setSkillsDialog(true)}><Sparkles size={17} />{selectedSkills.length > 0 && <em className="tool-count">{selectedSkills.length}</em>}</button>
+            <button className="icon-button" disabled={!selectedProject} title="Skills 管理（已启用的 Skill 可智能调用）" aria-label="Skills 管理" onClick={() => setSkillsDialog(true)}><Sparkles size={17} /></button>
             <button className={`icon-button ${workspacePanel ? "active-tool" : ""}`} disabled={!selectedProject} title="项目文件和改动" aria-label="项目文件和改动" onClick={() => setWorkspacePanel((value) => !value)}><Code2 size={17} /></button>
             <button className="icon-button header-settings-button" title="设置" aria-label="设置" onClick={() => setSettingsDialog(true)}><Settings size={17} /></button>
             <button className="icon-button danger" disabled={!selectedThread || turnRunning} title="删除当前会话" aria-label="删除当前会话" onClick={() => selectedThread && void deleteThread(selectedThread)}><Trash2 size={17} /></button>
@@ -665,10 +774,11 @@ export default function App() {
 
         <footer className="composer-wrap">
           <div className={`composer-box ${turnRunning ? "running" : ""}`}>
-            {selectedSkills.length > 0 && <div className="selected-skills">{selectedSkills.map((skill) => <div className="skill-chip" key={skill.path}><Sparkles size={13} /><span>{skill.interface?.displayName || skill.name}</span><button onClick={() => setSelectedSkills((current) => current.filter((item) => item.path !== skill.path))} aria-label={`移除 Skill ${skill.name}`}><X size={12} /></button></div>)}</div>}
+            {skillMention && <SkillMentionMenu skills={mentionSkills} activeIndex={Math.min(skillMentionIndex, Math.max(mentionSkills.length - 1, 0))} loading={skillsLoading} error={skillsError} limitReached={selectedSkills.length >= 6} onActiveIndexChange={setSkillMentionIndex} onSelect={selectMentionSkill} onManage={() => { setSkillMention(null); setSkillsDialog(true); }} />}
+            {selectedSkills.length > 0 && <div className="selected-skills" aria-label="本条消息强制使用的 Skills">{selectedSkills.map((skill) => <div className="skill-chip" key={skill.path} title="本条消息强制使用"><Sparkles size={13} /><span>@{skill.interface?.displayName || skill.name}</span><button onClick={() => setSelectedSkills((current) => current.filter((item) => item.path !== skill.path))} aria-label={`移除 Skill ${skill.name}`}><X size={12} /></button></div>)}</div>}
             {attachments.length > 0 && <div className="attachment-list">{attachments.map((item) => <div className="attachment-chip" key={item.id}>{item.kind === "image" ? <Image size={14} /> : <FileText size={14} />}<span><strong>{item.name}</strong><small>{Math.max(1, Math.round(item.size / 1024))} KB</small></span><button onClick={() => setAttachments((current) => current.filter((entry) => entry.id !== item.id))} aria-label={`移除 ${item.name}`}><X size={13} /></button></div>)}</div>}
-            <textarea value={composer} onChange={(event) => setComposer(event.target.value)} onPaste={(event) => { const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/")); if (images.length > 0) { event.preventDefault(); void addAttachments(images); } }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} placeholder={selectedProject ? "告诉 Codex 你想完成什么…" : "请先选择项目"} disabled={!selectedProject || bootstrap.bridge.status !== "ready" || turnRunning} rows={1} />
-            <div className="composer-actions"><div className="composer-left"><input ref={attachmentInputRef} className="sr-only" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.json,.jsonl,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.toml,.ini,.env,.sh,.py,.java,.go,.rs,.sql,.log,.csv" onChange={(event) => void addAttachments(event.target.files)} /><button className="attach-button" disabled={!selectedProject || turnRunning || attachments.length >= 6} onClick={() => attachmentInputRef.current?.click()} title="添加图片或文本/代码文件"><Paperclip size={15} /> <span>附件</span></button><button className={`attach-button ${selectedSkills.length > 0 ? "selected" : ""}`} disabled={!selectedProject || turnRunning} onClick={() => setSkillsDialog(true)} title="选择和管理 Skills"><Sparkles size={15} /> <span>Skills{selectedSkills.length > 0 ? ` ${selectedSkills.length}` : ""}</span></button><span>Enter 发送 · Shift+Enter 换行</span></div>{turnRunning ? <button className="stop-button" onClick={() => void interrupt()}><Square size={14} /> 停止</button> : <button className="send-button" onClick={() => void sendMessage()} disabled={(!composer.trim() && attachments.length === 0 && selectedSkills.length === 0) || sending || !selectedProject} aria-label="发送消息"><Send size={17} /></button>}</div>
+            <textarea ref={composerRef} value={composer} onChange={handleComposerChange} onSelect={(event) => updateSkillMention(composer, event.currentTarget.selectionStart)} onBlur={() => window.setTimeout(() => setSkillMention(null), 120)} onPaste={(event) => { const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/")); if (images.length > 0) { event.preventDefault(); void addAttachments(images); } }} onKeyDown={handleComposerKeyDown} placeholder={selectedProject ? "告诉 Codex 你想完成什么… 输入 @ 强制使用 Skill" : "请先选择项目"} disabled={!selectedProject || bootstrap.bridge.status !== "ready" || turnRunning} rows={1} />
+            <div className="composer-actions"><div className="composer-left"><input ref={attachmentInputRef} className="sr-only" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.json,.jsonl,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.toml,.ini,.env,.sh,.py,.java,.go,.rs,.sql,.log,.csv" onChange={(event) => void addAttachments(event.target.files)} /><button className="attach-button" disabled={!selectedProject || turnRunning || attachments.length >= 6} onClick={() => attachmentInputRef.current?.click()} title="添加图片或文本/代码文件"><Paperclip size={15} /> <span>附件</span></button><button className="attach-button" disabled={!selectedProject || turnRunning} onClick={() => setSkillsDialog(true)} title="管理允许智能调用的 Skills"><Sparkles size={15} /> <span>Skills</span></button><span>输入 @ 强制使用 Skill · Enter 发送</span></div>{turnRunning ? <button className="stop-button" onClick={() => void interrupt()}><Square size={14} /> 停止</button> : <button className="send-button" onClick={() => void sendMessage()} disabled={(!composer.trim() && attachments.length === 0 && selectedSkills.length === 0) || sending || !selectedProject} aria-label="发送消息"><Send size={17} /></button>}</div>
           </div>
           <small className="composer-note">Codex 可能会出错，请在执行重要操作前检查文件变更和命令。</small>
         </footer>
@@ -679,7 +789,7 @@ export default function App() {
       {(mobileProjects || mobileThreads) && <div className="mobile-scrim" onClick={() => { setMobileProjects(false); setMobileThreads(false); }} />}
       <ProjectDialog open={projectDialog} bootstrap={bootstrap} onClose={() => setProjectDialog(false)} onCreated={loadBootstrap} />
       <SettingsDialog open={settingsDialog} bootstrap={bootstrap} onClose={() => setSettingsDialog(false)} onChanged={loadBootstrap} />
-      <SkillsDialog open={skillsDialog} project={selectedProject} selected={selectedSkills} revision={skillsRevision} onSelectedChange={setSelectedSkills} onClose={() => setSkillsDialog(false)} />
+      <SkillsDialog open={skillsDialog} project={selectedProject} revision={skillsRevision} onSkillsChange={updateAvailableSkills} onClose={() => setSkillsDialog(false)} />
     </div>
   );
 }

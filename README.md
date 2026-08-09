@@ -9,7 +9,7 @@
 - 流式回答、工具状态、命令与文件操作审批、中断任务
 - 每个会话独立保存模型、思考强度和命令审批策略；全局审批仅作为新会话默认值
 - Codex 回复中的项目文件链接会在当前页打开文件面板，支持项目绝对路径、`file://`、行号定位
-- Skills 搜索、启用/停用、`SKILL.md` 预览，以及为下一条消息选择最多 6 个 Skills
+- Skills 搜索、智能调用开关和 `SKILL.md` 预览；聊天框输入 `@` 可为当前消息强制指定最多 6 个 Skills
 - OpenAI / ChatGPT 设备码登录和 API Key 登录
 - 第三方 Responses API 与 Chat Completions 自动适配
 - 自动从供应商 Base URL 的 `/models` 获取并切换模型，也支持手动填写模型 ID
