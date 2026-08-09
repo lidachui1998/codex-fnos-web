@@ -1,7 +1,8 @@
 import { CheckCircle2, CloudCog, Download, Image as ImageIcon, KeyRound, LoaderCircle, Network, Palette, Pencil, PlugZap, RefreshCw, ShieldCheck, Trash2, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { Bootstrap, CodexUpdateState, ProviderProfile, ProxyProfile } from "../types";
+import { reasoningProfileName } from "../reasoning-profile";
+import type { Bootstrap, CodexUpdateState, ProviderProfile, ProxyProfile, ReasoningProfile } from "../types";
 import { ModelCombobox } from "./ModelCombobox";
 import { Modal } from "./Modal";
 
@@ -19,6 +20,7 @@ type ProviderForm = {
   model: string;
   apiKey: string;
   proxyMode: ProviderProfile["proxyMode"];
+  reasoningProfile: ReasoningProfile;
   proxyProfileId: string;
   headers: string;
 };
@@ -38,6 +40,7 @@ const emptyProvider: ProviderForm = {
   model: "",
   apiKey: "",
   proxyMode: "inherit",
+  reasoningProfile: "auto",
   proxyProfileId: "",
   headers: "{}",
 };
@@ -118,6 +121,7 @@ export function SettingsDialog({ open, bootstrap, onClose, onChanged }: Props) {
       model: provider.model,
       apiKey: "",
       proxyMode: provider.proxyMode,
+      reasoningProfile: provider.reasoningProfile,
       proxyProfileId: provider.proxyProfileId ?? "",
       headers: "{}",
     });
@@ -259,6 +263,7 @@ export function SettingsDialog({ open, bootstrap, onClose, onChanged }: Props) {
                       proxyProfileId: value.startsWith("profile:") ? value.slice(8) : "",
                     });
                   }}><option value="inherit">继承应用默认代理</option><option value="direct">直连（不使用应用代理）</option>{bootstrap.proxies.map((proxy) => <option key={proxy.id} value={`profile:${proxy.id}`}>使用代理：{proxy.name}</option>)}</select></label>
+                  <label><span>思考档位类型</span><select value={providerForm.reasoningProfile} onChange={(event) => setProviderForm({ ...providerForm, reasoningProfile: event.target.value as ReasoningProfile })}>{(["auto", "openai", "anthropic", "deepseek", "qwen", "kimi", "glm", "gemini", "generic", "none"] as ReasoningProfile[]).map((profile) => <option key={profile} value={profile}>{reasoningProfileName(profile)}</option>)}</select><small>自动识别不准确时可手工指定。</small></label>
                   <label className="span-two"><span>模型 ID</span><div className="provider-model-field"><ModelCombobox required options={providerModels.map((model) => ({ value: model }))} value={providerForm.model} onChange={(model) => setProviderForm({ ...providerForm, model })} placeholder="先从 /models 获取，或手动输入" /><button type="button" className="secondary-button" onClick={() => void fetchProviderModels()} disabled={busy === "provider-models"}>{busy === "provider-models" ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />} 从 /models 获取</button></div>{providerModels.length > 0 && <span className="provider-model-count">已获取 {providerModels.length} 个模型，点击右侧箭头下拉选择，也可输入关键字筛选</span>}</label>
                   <label className="span-two"><span>附加请求头（JSON）</span><textarea rows={3} value={providerForm.headers} onChange={(event) => setProviderForm({ ...providerForm, headers: event.target.value })} /></label>
                 </div>

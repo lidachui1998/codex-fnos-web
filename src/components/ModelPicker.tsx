@@ -1,6 +1,7 @@
 import { Check, ChevronDown, KeyRound, LoaderCircle, RefreshCw, Settings2, Sparkles, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { inferReasoningProfile, reasoningOptions, reasoningProfileName } from "../reasoning-profile";
 import type { Bootstrap, ReasoningEffort } from "../types";
 import { ModelCombobox } from "./ModelCombobox";
 
@@ -83,19 +84,14 @@ export function ModelPicker({ bootstrap, open, providerId, model, effort, thread
 
   const quickModels = useMemo(() => models.slice(0, 6), [models]);
   const selectedModelOption = models.find((item) => item.model === draftModel);
-  const effortOptions = selectedModelOption?.supportedReasoningEfforts?.length
-    ? selectedModelOption.supportedReasoningEfforts.map((item) => item.reasoningEffort)
-    : (["low", "medium", "high", "xhigh", "max", "ultra"] as ReasoningEffort[]);
-  const effortLabels: Record<ReasoningEffort, string> = {
-    none: "不思考", minimal: "最少", low: "低", medium: "中", high: "高", xhigh: "超高", max: "最大", ultra: "Ultra",
-  };
+  const effortOptions = reasoningOptions(provider, draftModel, selectedModelOption?.supportedReasoningEfforts);
+  const reasoningProfile = inferReasoningProfile(provider, draftModel);
 
   function chooseModel(nextModel: string) {
     setDraftModel(nextModel);
     const option = models.find((item) => item.model === nextModel);
-    if (option?.supportedReasoningEfforts?.length && draftEffort && !option.supportedReasoningEfforts.some((item) => item.reasoningEffort === draftEffort)) {
-      setDraftEffort(option.defaultReasoningEffort ?? option.supportedReasoningEfforts[0].reasoningEffort);
-    }
+    const nextOptions = reasoningOptions(provider, nextModel, option?.supportedReasoningEfforts);
+    if (draftEffort && !nextOptions.some((item) => item.value === draftEffort)) setDraftEffort(option?.defaultReasoningEffort ?? "");
   }
 
   function changeProvider(nextId: string) {
@@ -144,7 +140,8 @@ export function ModelPicker({ bootstrap, open, providerId, model, effort, thread
             <label><span>供应商</span><select value={draftProviderId} onChange={(event) => changeProvider(event.target.value)}><option value="">OpenAI / ChatGPT</option>{bootstrap.providers.filter((item) => item.enabled).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
             <label><span>模型 ID {loading && <LoaderCircle size={12} className="spin" />}</span><ModelCombobox options={models.map((item) => ({ value: item.model, label: item.displayName }))} value={draftModel} onChange={chooseModel} placeholder="输入或下拉选择模型" /></label>
             {quickModels.length > 0 && <div className="quick-models">{quickModels.map((item) => <button key={item.id} className={draftModel === item.model ? "active" : ""} onClick={() => chooseModel(item.model)}>{item.displayName}</button>)}</div>}
-            <label><span>思考强度</span><select value={draftEffort} onChange={(event) => setDraftEffort(event.target.value as ReasoningEffort | "")}><option value="">跟随模型默认</option>{effortOptions.map((item) => <option key={item} value={item}>{effortLabels[item]}（{item}）</option>)}</select><small>会按当前会话保存；模型不支持时 Codex 会返回明确错误。</small></label>
+            {effortOptions.length > 0 && <label><span>思考程度 · {reasoningProfileName(reasoningProfile)}</span><select value={draftEffort} onChange={(event) => setDraftEffort(event.target.value as ReasoningEffort | "")}><option value="">跟随模型默认</option>{effortOptions.map((item) => <option key={item.value} value={item.value}>{item.label}（{item.value}）</option>)}</select><small>{draftEffort ? effortOptions.find((item) => item.value === draftEffort)?.description : "不同供应商和模型只显示它实际支持的档位。"}</small></label>}
+            {effortOptions.length === 0 && <div className="model-note">当前模型没有可配置的思考程度，将使用供应商默认行为。</div>}
             {draftProviderId && <button type="button" className="refresh-models" onClick={() => setRefreshKey((current) => current + 1)} disabled={loading}><RefreshCw size={13} className={loading ? "spin" : ""} /> 从供应商 /models 重新获取</button>}
             {providerWillChange && <div className="model-note">供应商与当前会话不同，发送消息时会自动创建一个新会话；只更换同一供应商的模型则会继续当前会话。</div>}
             <button className="primary-button apply-model" disabled={!draftModel.trim() && Boolean(draftProviderId)} onClick={async () => { await onSelect(draftProviderId, draftModel.trim(), draftEffort); onOpenChange(false); }}><Check size={16} /> 使用这个模型</button>

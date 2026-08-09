@@ -1,5 +1,5 @@
-import { Bot, CheckCircle2, ChevronDown, ChevronRight, FileCode2, LoaderCircle, Maximize2, TerminalSquare, UserRound, Wrench, X } from "lucide-react";
-import { useState } from "react";
+import { Bot, Check, CheckCircle2, ChevronDown, ChevronRight, Copy, FileCode2, LoaderCircle, Maximize2, Pencil, RefreshCw, RotateCcw, TerminalSquare, UserRound, Wrench, X } from "lucide-react";
+import { useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ThreadItem } from "../types";
@@ -53,8 +53,52 @@ function ToolItem({ item }: { item: ThreadItem }) {
   );
 }
 
-export function Timeline({ items, streamingItemId, turnRunning, projectPath, onOpenFile, onSuggestion }: { items: ThreadItem[]; streamingItemId?: string | null; turnRunning?: boolean; projectPath: string; onOpenFile: (path: string) => void; onSuggestion?: (text: string) => void }) {
+async function copyText(value: string) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+  } catch {
+    // fnOS is often opened over a LAN HTTP address where the async Clipboard
+    // API exists but is denied because the page is not a secure context.
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("浏览器拒绝了复制操作");
+}
+
+type Props = {
+  items: ThreadItem[];
+  streamingItemId?: string | null;
+  turnRunning?: boolean;
+  projectPath: string;
+  onOpenFile: (path: string) => void;
+  onSuggestion?: (text: string) => void;
+  onResend: (item: ThreadItem) => void;
+  onRegenerate: (item: ThreadItem) => void;
+  onEditBranch: (item: ThreadItem) => void;
+};
+
+export function Timeline({ items, streamingItemId, turnRunning, projectPath, onOpenFile, onSuggestion, onResend, onRegenerate, onEditBranch }: Props) {
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [visibleLimit, setVisibleLimit] = useState(140);
+  const renderableItems = useMemo(() => items.filter((item) => item.type !== "reasoning" || item.summary?.some((text) => text.trim())), [items]);
+  const hiddenCount = Math.max(0, renderableItems.length - visibleLimit);
+  const visibleItems = hiddenCount > 0 ? renderableItems.slice(hiddenCount) : renderableItems;
+
+  async function copyItem(item: ThreadItem, value: string) {
+    await copyText(value);
+    setCopiedId(item.id);
+    window.setTimeout(() => setCopiedId((current) => current === item.id ? null : current), 1400);
+  }
   if (items.length === 0) {
     return (
       <div className="conversation-empty">
@@ -69,14 +113,14 @@ export function Timeline({ items, streamingItemId, turnRunning, projectPath, onO
       </div>
     );
   }
-  const visibleItems = items.filter((item) => item.type !== "reasoning" || item.summary?.some((text) => text.trim()));
   return (
     <div className="timeline">
+      {hiddenCount > 0 && <button className="load-earlier" onClick={() => setVisibleLimit((value) => value + 120)}><RotateCcw size={14} />加载更早的 {Math.min(hiddenCount, 120)} 项</button>}
       {visibleItems.map((item) => {
         if (item.type === "userMessage") {
           const text = userText(item);
           const images = userImages(item);
-          return <article className="message user-message" key={item.id}><div className="message-avatar"><UserRound size={16} /></div><div className="message-body"><div className="message-label">你</div>{images.length > 0 && <div className={`message-images ${images.length > 1 ? "multiple" : ""}`}>{images.map((url, index) => <button key={`${item.id}-${index}`} onClick={() => setPreviewImage(url)} title="点击放大图片"><img src={url} alt={`发送的图片 ${index + 1}`} loading="lazy" /><span><Maximize2 size={14} /></span></button>)}</div>}{text && <div className="message-text">{text}</div>}</div></article>;
+          return <article className="message user-message" key={item.id}><div className="message-avatar"><UserRound size={16} /></div><div className="message-body"><div className="message-label">你</div>{images.length > 0 && <div className={`message-images ${images.length > 1 ? "multiple" : ""}`}>{images.map((url, index) => <button key={`${item.id}-${index}`} onClick={() => setPreviewImage(url)} title="点击放大图片"><img src={url} alt={`发送的图片 ${index + 1}`} loading="lazy" /><span><Maximize2 size={14} /></span></button>)}</div>}{text && <div className="message-text">{text}</div>}<div className="message-actions"><button onClick={() => void copyItem(item, text)}>{copiedId === item.id ? <Check size={13} /> : <Copy size={13} />}{copiedId === item.id ? "已复制" : "复制"}</button><button onClick={() => onResend(item)}><RefreshCw size={13} />重新发送</button><button disabled={!item.turnId || turnRunning} onClick={() => onEditBranch(item)}><Pencil size={13} />编辑并分支</button></div></div></article>;
         }
         if (item.type === "agentMessage" || item.type === "plan") {
           return <article className="message agent-message" key={item.id}><div className="message-avatar agent"><Bot size={16} /></div><div className="message-body"><div className="message-label">Codex</div><div className="message-text markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ children, href, node: _node, ...props }) => {
@@ -84,7 +128,7 @@ export function Timeline({ items, streamingItemId, turnRunning, projectPath, onO
             return file
               ? <a {...props} href={href} className="workspace-file-link" onClick={(event) => { event.preventDefault(); onOpenFile(file); }} title="在项目文件中打开">{children}</a>
               : <a {...props} href={href} target="_blank" rel="noreferrer">{children}</a>;
-          } }}>{item.text ?? ""}</ReactMarkdown>{streamingItemId === item.id && <span className="stream-caret" />}</div></div></article>;
+          } }}>{item.text ?? ""}</ReactMarkdown>{streamingItemId === item.id && <span className="stream-caret" />}</div>{streamingItemId !== item.id && <div className="message-actions"><button onClick={() => void copyItem(item, item.text ?? "")}>{copiedId === item.id ? <Check size={13} /> : <Copy size={13} />}{copiedId === item.id ? "已复制" : "复制"}</button><button disabled={!item.turnId || turnRunning} onClick={() => onRegenerate(item)}><RefreshCw size={13} />重新生成</button></div>}</div></article>;
         }
         if (["commandExecution", "fileChange", "mcpToolCall", "collabToolCall", "webSearch"].includes(item.type)) {
           return <ToolItem item={item} key={item.id} />;

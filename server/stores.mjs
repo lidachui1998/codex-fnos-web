@@ -234,6 +234,17 @@ export class Stores {
     return this.db.prepare("SELECT approval_policy FROM thread_preferences WHERE thread_id = ?").get(threadId)?.approval_policy ?? null;
   }
 
+  getThreadPreferences(threadId) {
+    const row = this.db.prepare("SELECT * FROM thread_preferences WHERE thread_id = ?").get(threadId);
+    return row ? {
+      approvalPolicy: row.approval_policy,
+      name: row.display_name || null,
+      pinned: Boolean(row.pinned),
+      deleted: Boolean(row.deleted),
+      updatedAt: row.updated_at,
+    } : null;
+  }
+
   saveThreadApprovalPolicy(threadId, approvalPolicy) {
     if (!["on-request", "never"].includes(approvalPolicy)) throw new Error("命令审批方式无效");
     this.db.prepare(`
@@ -241,6 +252,35 @@ export class Stores {
       ON CONFLICT(thread_id) DO UPDATE SET approval_policy = excluded.approval_policy, updated_at = excluded.updated_at
     `).run(String(threadId), approvalPolicy, now());
     return approvalPolicy;
+  }
+
+  saveThreadDisplayName(threadId, displayName) {
+    const name = String(displayName ?? "").trim().slice(0, 160) || null;
+    this.db.prepare(`
+      INSERT INTO thread_preferences (thread_id, approval_policy, display_name, pinned, updated_at)
+      VALUES (?, ?, ?, 0, ?)
+      ON CONFLICT(thread_id) DO UPDATE SET display_name = excluded.display_name, updated_at = excluded.updated_at
+    `).run(String(threadId), this.getSettings().approvalPolicy, name, now());
+    return name;
+  }
+
+  saveThreadPinned(threadId, pinned) {
+    const value = pinned ? 1 : 0;
+    this.db.prepare(`
+      INSERT INTO thread_preferences (thread_id, approval_policy, display_name, pinned, updated_at)
+      VALUES (?, ?, NULL, ?, ?)
+      ON CONFLICT(thread_id) DO UPDATE SET pinned = excluded.pinned, updated_at = excluded.updated_at
+    `).run(String(threadId), this.getSettings().approvalPolicy, value, now());
+    return Boolean(value);
+  }
+
+  saveThreadDeleted(threadId) {
+    this.db.prepare(`
+      INSERT INTO thread_preferences (thread_id, approval_policy, deleted, updated_at)
+      VALUES (?, ?, 1, ?)
+      ON CONFLICT(thread_id) DO UPDATE SET deleted = 1, pinned = 0, updated_at = excluded.updated_at
+    `).run(String(threadId), this.getSettings().approvalPolicy, now());
+    return true;
   }
 
   deleteThreadPreferences(threadId) {
@@ -267,6 +307,7 @@ export class Stores {
       hasCustomHeaders: Boolean(row.headers_encrypted),
       proxyProfileId: row.proxy_profile_id,
       proxyMode: row.proxy_mode || (row.proxy_profile_id ? "profile" : "inherit"),
+      reasoningProfile: row.reasoning_profile || "auto",
       enabled: Boolean(row.enabled),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -292,6 +333,10 @@ export class Stores {
       ? JSON.parse(decryptSecret(existing?.headers_encrypted, this.masterKey) || "{}")
       : normalizeHeaders(input.headers);
     const protocol = input.protocol ?? existing?.protocol ?? "responses";
+    const reasoningProfile = input.reasoningProfile ?? existing?.reasoning_profile ?? "auto";
+    if (!["auto", "openai", "anthropic", "deepseek", "qwen", "kimi", "glm", "gemini", "generic", "none"].includes(reasoningProfile)) {
+      throw new Error("思考模式配置无效");
+    }
     if (!["responses", "chat_completions"].includes(protocol)) throw new Error("不支持的 API 协议");
     const model = String(input.model ?? existing?.model ?? "").trim();
     if (!model) throw new Error("模型名称不能为空");
@@ -305,13 +350,14 @@ export class Stores {
     this.db.prepare(`
       INSERT INTO provider_profiles (
         id, name, protocol, base_url, model, api_key_encrypted, api_key_hint,
-        headers_encrypted, proxy_profile_id, proxy_mode, enabled, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        headers_encrypted, proxy_profile_id, proxy_mode, reasoning_profile, enabled, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name, protocol = excluded.protocol, base_url = excluded.base_url,
         model = excluded.model, api_key_encrypted = excluded.api_key_encrypted,
         api_key_hint = excluded.api_key_hint, headers_encrypted = excluded.headers_encrypted,
         proxy_profile_id = excluded.proxy_profile_id, proxy_mode = excluded.proxy_mode,
+        reasoning_profile = excluded.reasoning_profile,
         enabled = excluded.enabled,
         updated_at = excluded.updated_at
     `).run(
@@ -325,6 +371,7 @@ export class Stores {
       encryptSecret(JSON.stringify(headers), this.masterKey),
       proxyProfileId,
       proxyMode,
+      reasoningProfile,
       input.enabled === false ? 0 : 1,
       existing?.created_at ?? timestamp,
       timestamp,

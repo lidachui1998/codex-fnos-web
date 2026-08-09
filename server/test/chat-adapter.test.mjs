@@ -48,3 +48,20 @@ test("converts a non-streaming chat response to a Responses object", () => {
   assert.equal(result.output[0].content[0].text, "hello");
   assert.deepEqual(result.usage, { input_tokens: 3, output_tokens: 2, total_tokens: 5 });
 });
+
+test("maps reasoning controls for different compatible provider profiles", () => {
+  assert.deepEqual(
+    {
+      reasoning_effort: responsesToChat({ model: "gpt-5.6", input: "hi", reasoning: { effort: "xhigh" } }, "fallback", "openai").reasoning_effort,
+      thinking: responsesToChat({ model: "deepseek-v4-pro", input: "hi", reasoning: { effort: "max" } }, "fallback", "deepseek").thinking,
+      deepseekEffort: responsesToChat({ model: "deepseek-v4-pro", input: "hi", reasoning: { effort: "xhigh" } }, "fallback", "deepseek").reasoning_effort,
+      qwenThinking: responsesToChat({ model: "qwen3.8-max-preview", input: "hi", reasoning: { effort: "none" } }, "fallback", "qwen").enable_thinking,
+    },
+    {
+      reasoning_effort: "xhigh",
+      thinking: { type: "enabled" },
+      deepseekEffort: "max",
+      qwenThinking: false,
+    },
+  );
+});

@@ -42,6 +42,7 @@ test("migrates legacy single-url proxies and provider assignments", () => {
     assert.equal(proxy.http_url_encrypted, "encrypted-value");
     assert.equal(proxy.http_url_hint, "http://127.0.0.1:7890");
     assert.equal(provider.proxy_mode, "profile");
+    assert.equal(provider.reasoning_profile, "auto");
   } finally {
     migrated.close();
     rmSync(root, { recursive: true, force: true });

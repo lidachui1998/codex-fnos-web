@@ -13,6 +13,7 @@ const nodeBin = process.execPath;
 const codexBin = process.env.CODEX_BIN;
 if (!codexBin) throw new Error("CODEX_BIN is required for the app-server smoke test");
 const assistantText = "第三方 API 链路正常\n\n**Markdown 已生效**\n\n- 模型切换\n- 附件输入\n- [打开 src/index.js](src/index.js:1)\n\n```js\nconsole.log('fnOS');\n```";
+const streamDelayMs = process.env.E2E_SERVE_UI === "1" ? 2_500 : 50;
 const testImagePng = await readFile(join(rootDir, "assets", "app-icon.png"));
 const testImageDataUrl = `data:image/png;base64,${testImagePng.toString("base64")}`;
 
@@ -70,7 +71,9 @@ function createMockProvider(modelRequests) {
       }
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
       writeSse(res, { id: "chat-test", model: body.model, choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }] });
+      await delay(streamDelayMs);
       writeSse(res, { id: "chat-test", model: body.model, choices: [{ index: 0, delta: { content: assistantText }, finish_reason: null }] });
+      await delay(streamDelayMs);
       writeSse(res, { id: "chat-test", model: body.model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
       writeSse(res, { id: "chat-test", model: body.model, choices: [], usage: { prompt_tokens: 8, completion_tokens: 7, total_tokens: 15 } });
       res.end("data: [DONE]\n\n");
@@ -385,6 +388,11 @@ try {
   assert.equal(resumedThread.model, "mock-coder-fast");
   assert.equal(resumedThread.reasoningEffort, "high");
   assert.equal(resumedThread.approvalPolicy, "on-request");
+  const metadata = await request(appBaseUrl, cookie, `/api/threads/${threadId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name: "E2E pinned chat", pinned: true }),
+  });
+  assert.deepEqual(metadata.thread, { id: threadId, name: "E2E pinned chat", pinned: true });
   await delay(1200);
   const persistedThreads = await request(appBaseUrl, cookie, `/api/threads?cwd=${encodeURIComponent(projectResult.project.path)}`);
   const allPersistedThreads = await request(appBaseUrl, cookie, "/api/threads");
@@ -399,6 +407,15 @@ try {
     scopedThreads: persistedThreads.data.map((thread) => ({ id: thread.id, cwd: thread.cwd, source: thread.source })),
     allThreads: allPersistedThreads.data.map((thread) => ({ id: thread.id, cwd: thread.cwd, source: thread.source })),
   }));
+  const persistedThread = persistedThreads.data.find((thread) => thread.id === threadId);
+  assert.equal(persistedThread.name, "E2E pinned chat");
+  assert.equal(persistedThread.pinned, true);
+  const searchResult = await request(appBaseUrl, cookie, "/api/threads/search?query=E2E%20pinned");
+  assert.ok(searchResult.data.some((thread) => thread.id === threadId && thread.projectId === projectResult.project.id));
+  await request(appBaseUrl, cookie, `/api/threads/${threadId}/archive`, { method: "POST", body: "{}" });
+  const archivedThreads = await request(appBaseUrl, cookie, `/api/threads?cwd=${encodeURIComponent(projectResult.project.path)}&archived=1`);
+  assert.ok(archivedThreads.data.some((thread) => thread.id === threadId && thread.archived));
+  await request(appBaseUrl, cookie, `/api/threads/${threadId}/unarchive`, { method: "POST", body: "{}" });
   const removablePath = join(workspaceRoot, "remove-from-list-only");
   const removable = await request(appBaseUrl, cookie, "/api/projects", {
     method: "POST",
@@ -428,9 +445,19 @@ try {
   assert.equal(restartedResume.approvalPolicy, "on-request", "per-thread approval policy must survive an app restart");
   let threadDelete = false;
   if (process.env.E2E_SERVE_UI !== "1") {
+    const sourceTurnId = restartedResume.thread.turns?.[0]?.id;
+    assert.ok(sourceTurnId, "source thread needs a turn for edit-and-branch coverage");
+    const forked = await request(appBaseUrl, restartedCookie, `/api/threads/${threadId}/fork`, {
+      method: "POST",
+      body: JSON.stringify({ beforeTurnId: sourceTurnId }),
+    });
+    assert.notEqual(forked.thread.id, threadId, "edit-and-branch must create a new thread");
+    await request(appBaseUrl, restartedCookie, `/api/threads/${forked.thread.id}`, { method: "DELETE" });
     await request(appBaseUrl, restartedCookie, `/api/threads/${threadId}`, { method: "DELETE" });
     const threadsAfterDelete = await request(appBaseUrl, restartedCookie, `/api/threads?cwd=${encodeURIComponent(projectResult.project.path)}`);
     assert.equal(threadsAfterDelete.data.some((thread) => thread.id === threadId), false, "deleted thread must leave the active history list");
+    const archiveAfterDelete = await request(appBaseUrl, restartedCookie, `/api/threads?cwd=${encodeURIComponent(projectResult.project.path)}&archived=1`);
+    assert.equal(archiveAfterDelete.data.some((thread) => thread.id === threadId), false, "deleted thread must not reappear in archived history");
     threadDelete = true;
   }
 
@@ -456,6 +483,9 @@ try {
     eventCount: events.length,
     persistedHistory: true,
     historyAfterRestart: true,
+    threadManagement: true,
+    globalSearch: true,
+    editBranch: true,
     threadDelete,
   }, null, 2));
   if (process.env.E2E_SERVE_UI === "1") {

@@ -26,6 +26,7 @@ export type ProviderProfile = {
   hasCustomHeaders: boolean;
   proxyProfileId: string | null;
   proxyMode: "inherit" | "direct" | "profile";
+  reasoningProfile: ReasoningProfile;
   enabled: boolean;
   updatedAt: number;
 };
@@ -42,6 +43,7 @@ export type Project = {
 
 export type ThreadItem = {
   id: string;
+  turnId?: string;
   type: string;
   text?: string;
   content?: Array<{ type: string; text?: string; url?: string; path?: string; detail?: string }>;
@@ -68,6 +70,11 @@ export type Turn = {
 
 export type Thread = {
   id: string;
+  name?: string;
+  pinned?: boolean;
+  archived?: boolean;
+  projectId?: string;
+  projectName?: string;
   preview: string;
   cwd: string;
   createdAt: number;
@@ -81,6 +88,7 @@ export type Thread = {
 };
 
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+export type ReasoningProfile = "auto" | "openai" | "anthropic" | "deepseek" | "qwen" | "kimi" | "glm" | "gemini" | "generic" | "none";
 export type ApprovalPolicy = "on-request" | "never";
 
 export type Skill = {

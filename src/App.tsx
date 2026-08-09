@@ -1,8 +1,9 @@
-import { ArrowDownToLine, ArrowUpToLine, Bot, Code2, FileText, Folder, FolderMinus, Image, Menu, MessageSquarePlus, PanelLeft, PanelLeftClose, PanelLeftOpen, Paperclip, Plus, Search, Send, Settings, ShieldCheck, Sparkles, Square, Trash2, Wifi, WifiOff, X } from "lucide-react";
+import { Archive, ArrowDownToLine, ArrowUpToLine, Bot, Code2, FileText, Folder, FolderMinus, Image, Menu, MessageSquarePlus, MoreHorizontal, PanelLeft, PanelLeftClose, PanelLeftOpen, Paperclip, Plus, Search, Send, Settings, ShieldCheck, Sparkles, Square, Trash2, Wifi, WifiOff, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent } from "react";
 import { api, ApiError, connectEvents } from "./api";
 import { createClientId } from "./client-id";
 import { ApprovalCard } from "./components/ApprovalCard";
+import { GlobalSearchDialog } from "./components/GlobalSearchDialog";
 import { LoginScreen } from "./components/LoginScreen";
 import { ModelPicker } from "./components/ModelPicker";
 import { ProjectDialog } from "./components/ProjectDialog";
@@ -10,6 +11,7 @@ import { SettingsDialog } from "./components/SettingsDialog";
 import { findSkillMention, matchingSkills, SkillMentionMenu, type SkillMention } from "./components/SkillMentionMenu";
 import { SkillsDialog } from "./components/SkillsDialog";
 import { Timeline } from "./components/Timeline";
+import { ThreadMenu } from "./components/ThreadMenu";
 import { WorkspacePanel } from "./components/WorkspacePanel";
 import type { AppEvent, ApprovalPolicy, Bootstrap, Project, ReasoningEffort, Skill, SkillsResult, Thread, ThreadItem } from "./types";
 
@@ -22,10 +24,11 @@ function upsertItem(items: ThreadItem[], next: ThreadItem) {
 }
 
 function transcript(thread?: Thread | null) {
-  return thread?.turns?.flatMap((turn) => turn.items ?? []) ?? [];
+  return thread?.turns?.flatMap((turn) => (turn.items ?? []).map((item) => ({ ...item, turnId: turn.id }))) ?? [];
 }
 
 function threadTitle(thread: Thread) {
+  if (thread.name?.trim()) return thread.name.trim();
   const value = thread.preview
     ?.replace(/\s*<fnos_attachment name=("[^"]*"|'[^']*')>[\s\S]*?<\/fnos_attachment>/g, "")
     .trim() || "";
@@ -58,11 +61,46 @@ type ChatAttachment =
   | { id: string; kind: "image"; name: string; size: number; dataUrl: string }
   | { id: string; kind: "text"; name: string; size: number; content: string };
 
+type OutgoingMessage = {
+  text: string;
+  attachments: ChatAttachment[];
+  skills: Skill[];
+  fromQueue?: boolean;
+};
+
+type QueuedMessage = OutgoingMessage & { id: string; threadId: string };
+
 function friendlyTime(seconds: number) {
   const date = new Date(seconds * 1000);
   const today = new Date();
   if (date.toDateString() === today.toDateString()) return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
   return date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
+}
+
+function outgoingFromItem(item: ThreadItem, skills: Skill[]): OutgoingMessage {
+  const textParts = item.content?.filter((part) => part.type === "text").map((part) => part.text ?? "") ?? [];
+  const joined = textParts.join("\n");
+  const skillNames = [...joined.matchAll(/(?:^|\s)\$([\w:-]+)/g)].map((match) => match[1]);
+  const attachments: ChatAttachment[] = [];
+  for (const value of textParts) {
+    for (const match of value.matchAll(/<fnos_attachment name=("([^"]*)"|'([^']*)')>\n?([\s\S]*?)\n?<\/fnos_attachment>/g)) {
+      const content = match[4] ?? "";
+      attachments.push({ id: createClientId(), kind: "text", name: match[2] || match[3] || "附件.txt", size: new TextEncoder().encode(content).length, content });
+    }
+  }
+  for (const [index, part] of (item.content ?? []).filter((entry) => entry.type === "image" && entry.url?.startsWith("data:image/")).entries()) {
+    const dataUrl = part.url as string;
+    const extension = dataUrl.match(/^data:image\/(png|jpeg|webp|gif)/i)?.[1]?.replace("jpeg", "jpg") || "png";
+    attachments.push({ id: createClientId(), kind: "image", name: `图片-${index + 1}.${extension}`, size: Math.floor((dataUrl.length * 3) / 4), dataUrl });
+  }
+  return {
+    text: joined
+      .replace(/\s*<fnos_attachment name=("[^"]*"|'[^']*')>[\s\S]*?<\/fnos_attachment>/g, "")
+      .replace(/^(?:\$[\w:-]+\s*)+/, "")
+      .trim(),
+    attachments,
+    skills: skillNames.map((name) => skills.find((skill) => skill.name === name)).filter((skill): skill is Skill => Boolean(skill)),
+  };
 }
 
 export default function App() {
@@ -82,6 +120,7 @@ export default function App() {
   const [skillMention, setSkillMention] = useState<SkillMention | null>(null);
   const [skillMentionIndex, setSkillMentionIndex] = useState(0);
   const [threads, setThreads] = useState<Thread[]>([]);
+  const [showArchived, setShowArchived] = useState(false);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [items, setItems] = useState<ThreadItem[]>([]);
   const [streamingItemId, setStreamingItemId] = useState<string | null>(null);
@@ -90,11 +129,14 @@ export default function App() {
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [composer, setComposer] = useState("");
   const [sending, setSending] = useState(false);
+  const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
   const [projectDialog, setProjectDialog] = useState(false);
   const [settingsDialog, setSettingsDialog] = useState(false);
   const [skillsDialog, setSkillsDialog] = useState(false);
   const [skillsRevision, setSkillsRevision] = useState(0);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+  const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
   const [mobileProjects, setMobileProjects] = useState(false);
   const [mobileThreads, setMobileThreads] = useState(false);
   const [threadSearch, setThreadSearch] = useState("");
@@ -104,6 +146,8 @@ export default function App() {
   const [scrollPosition, setScrollPosition] = useState({ atTop: true, atBottom: true });
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const selectedThreadRef = useRef<string | null>(null);
+  const sendingRef = useRef(false);
+  const turnRunningRef = useRef(false);
   const selectionProjectRef = useRef<string | null | undefined>(undefined);
   const deltaQueue = useRef(new Map<string, string>());
   const deltaFrame = useRef<number | null>(null);
@@ -116,6 +160,7 @@ export default function App() {
   const selectedProject = bootstrap?.projects.find((project) => project.id === selectedProjectId) ?? null;
   const selectedThread = threads.find((thread) => thread.id === selectedThreadId) ?? null;
   const visibleThreads = threads.filter((thread) => threadTitle(thread).toLowerCase().includes(threadSearch.toLowerCase()));
+  const currentQueuedMessages = queuedMessages.filter((item) => item.threadId === selectedThreadId);
   const eventsEnabled = authMode === "authenticated" && bootstrap !== null;
   const mentionSkills = useMemo(
     () => matchingSkills(availableSkills, skillMention?.query ?? "", selectedSkills),
@@ -306,20 +351,22 @@ export default function App() {
     }
     if (params.threadId && params.threadId !== selectedThreadRef.current) return;
     if (event.method === "turn/started") {
+      turnRunningRef.current = true;
       setTurnRunning(true);
       setActiveTurnId(params.turn?.id ?? null);
       return;
     }
     if (event.method === "item/started" && params.item) {
+      const eventItem = { ...params.item, turnId: params.turnId ?? params.turn?.id };
       if (params.item.type === "userMessage" && optimisticUserItemId.current) {
         const optimisticId = optimisticUserItemId.current;
         optimisticUserItemId.current = null;
         setItems((current) => upsertItem(
           optimisticId === params.item.id ? current : current.filter((item) => item.id !== optimisticId),
-          params.item,
+          eventItem,
         ));
       } else {
-        setItems((current) => upsertItem(current, params.item));
+        setItems((current) => upsertItem(current, eventItem));
       }
       if (params.item.type === "agentMessage") setStreamingItemId(params.item.id);
       return;
@@ -341,11 +388,15 @@ export default function App() {
     }
     if (event.method === "item/completed" && params.item) {
       deltaQueue.current.delete(params.item.id);
-      setItems((current) => upsertItem(current, params.item));
+      setItems((current) => {
+        const existing = current.find((item) => item.id === params.item.id);
+        return upsertItem(current, { ...params.item, turnId: params.turnId ?? params.turn?.id ?? existing?.turnId });
+      });
       setStreamingItemId((current) => current === params.item.id ? null : current);
       return;
     }
     if (event.method === "turn/completed") {
+      turnRunningRef.current = false;
       setTurnRunning(false);
       setActiveTurnId(null);
       setStreamingItemId(null);
@@ -380,14 +431,14 @@ export default function App() {
       return;
     }
     try {
-      const result = await api<{ data: Thread[] }>(`/api/threads?cwd=${encodeURIComponent(project.path)}`);
+      const result = await api<{ data: Thread[] }>(`/api/threads?cwd=${encodeURIComponent(project.path)}${showArchived ? "&archived=1" : ""}`);
       setThreads(result.data ?? []);
       setSelectedThreadId((current) => current && result.data?.some((item) => item.id === current) ? current : null);
       if (!selectedThreadRef.current) setItems([]);
     } catch (reason) {
       setFatalError(reason instanceof Error ? reason.message : "会话列表加载失败");
     }
-  }, [bootstrap?.bridge.status]);
+  }, [bootstrap?.bridge.status, showArchived]);
 
   useEffect(() => { void loadThreads(selectedProject); }, [loadThreads, selectedProject]);
 
@@ -498,7 +549,7 @@ export default function App() {
     setSelectedSkills((current) => current.filter((skill) => enabledPaths.has(skill.path)));
   }
 
-  async function openThread(thread: Thread) {
+  async function openThread(thread: Thread, projectOverride?: Project | null) {
     setSelectedThreadId(thread.id);
     setMobileThreads(false);
     setItems([]);
@@ -509,9 +560,11 @@ export default function App() {
       setThreads((current) => current.map((item) => item.id === thread.id ? { ...item, ...resumedThread } : item));
       forceLatestOnOpenRef.current = true;
       setItems(transcript(resumedThread));
-      setTurnRunning(typeof resumedThread.status === "object" && resumedThread.status?.type === "active");
+      const resumedRunning = typeof resumedThread.status === "object" && resumedThread.status?.type === "active";
+      turnRunningRef.current = resumedRunning;
+      setTurnRunning(resumedRunning);
       const providerId = threadProviderId(resumedThread);
-      const saved = savedModelSelection(selectedProject?.id ?? null, result.thread.id);
+      const saved = savedModelSelection(projectOverride?.id ?? selectedProject?.id ?? null, result.thread.id);
       setSelectedProviderId(providerId);
       setSelectedModel(saved?.model || result.model || bootstrap?.providers.find((item) => item.id === providerId)?.model || "");
       setSelectedEffort(saved?.effort ?? result.reasoningEffort ?? "");
@@ -533,6 +586,7 @@ export default function App() {
     const createdThread = { ...result.thread, approvalPolicy: result.approvalPolicy ?? approvalPolicy };
     setThreads((current) => [createdThread, ...current.filter((item) => item.id !== createdThread.id)]);
     setSelectedThreadId(result.thread.id);
+    selectedThreadRef.current = result.thread.id;
     setSelectedApprovalPolicy(createdThread.approvalPolicy);
     setSelectedSkills([]);
     localStorage.setItem(selectionKey(selectedProject.id, result.thread.id), JSON.stringify({ providerId: selectedProviderId, model: selectedModel, effort: selectedEffort }));
@@ -541,44 +595,117 @@ export default function App() {
     return result.thread.id;
   }
 
-  async function sendMessage() {
-    const text = composer.trim();
-    if ((!text && attachments.length === 0 && selectedSkills.length === 0) || sending || turnRunning || !selectedProject) return;
+  async function startMessage(payload: OutgoingMessage, forcedThreadId?: string | null) {
+    const text = payload.text.trim();
+    if ((!text && payload.attachments.length === 0 && payload.skills.length === 0) || sendingRef.current || !selectedProject) return;
+    sendingRef.current = true;
     setSending(true);
     setFatalError("");
     try {
       const providerChanged = selectedThread && threadProviderId(selectedThread) !== selectedProviderId;
-      const threadId = !selectedThreadId || providerChanged ? await createThread() : selectedThreadId;
+      const threadId = forcedThreadId || (!selectedThreadId || providerChanged ? await createThread() : selectedThreadId);
       if (!threadId) return;
       const clientId = createClientId();
       optimisticUserItemId.current = clientId;
       const optimisticContent: NonNullable<ThreadItem["content"]> = [];
       if (text) optimisticContent.push({ type: "text", text });
-      else if (selectedSkills.length > 0) optimisticContent.push({ type: "text", text: `使用 Skills：${selectedSkills.map((skill) => skill.name).join("、")}` });
-      for (const attachment of attachments) {
+      else if (payload.skills.length > 0) optimisticContent.push({ type: "text", text: `使用 Skills：${payload.skills.map((skill) => skill.name).join("、")}` });
+      for (const attachment of payload.attachments) {
         if (attachment.kind === "image") optimisticContent.push({ type: "image", url: attachment.dataUrl });
         else optimisticContent.push({ type: "text", text: `📎 ${attachment.name}` });
       }
-      setItems((current) => [...current, { id: clientId, type: "userMessage", content: optimisticContent }]);
+      if (threadId === selectedThreadRef.current) setItems((current) => [...current, { id: clientId, type: "userMessage", content: optimisticContent }]);
       setThreads((current) => current.map((thread) => thread.id === threadId && !thread.preview?.trim()
         ? { ...thread, preview: text, updatedAt: Math.floor(Date.now() / 1000) }
         : thread));
-      setComposer("");
-      const sendingAttachments = attachments;
-      const sendingSkills = selectedSkills;
-      setAttachments([]);
-      setSelectedSkills([]);
+      turnRunningRef.current = true;
       setTurnRunning(true);
       const result = await api<{ turn: { id: string } }>(`/api/threads/${threadId}/turns`, {
         method: "POST",
-        body: JSON.stringify({ text, clientId, projectId: selectedProject.id, model: selectedModel || undefined, effort: selectedEffort || undefined, approvalPolicy: selectedApprovalPolicy, skills: sendingSkills.map(({ name, path }) => ({ name, path })), attachments: sendingAttachments.map(({ id: _id, size: _size, ...item }) => item) }),
+        body: JSON.stringify({ text, clientId, projectId: selectedProject.id, model: selectedModel || undefined, effort: selectedEffort || undefined, approvalPolicy: selectedApprovalPolicy, skills: payload.skills.map(({ name, path }) => ({ name, path })), attachments: payload.attachments.map(({ id: _id, size: _size, ...item }) => item) }),
       });
       setActiveTurnId(result.turn.id);
     } catch (reason) {
+      turnRunningRef.current = false;
       setTurnRunning(false);
       optimisticUserItemId.current = null;
       setFatalError(reason instanceof Error ? reason.message : "消息发送失败");
     } finally {
+      sendingRef.current = false;
+      setSending(false);
+    }
+  }
+
+  async function sendMessage(payloadOverride?: OutgoingMessage) {
+    const payload = payloadOverride ?? { text: composer, attachments, skills: selectedSkills };
+    if ((!payload.text.trim() && payload.attachments.length === 0 && payload.skills.length === 0) || !selectedProject) return;
+    if ((turnRunningRef.current || sendingRef.current) && !payload.fromQueue) {
+      if (!selectedThreadId) return;
+      setQueuedMessages((current) => [...current, { ...payload, id: createClientId(), threadId: selectedThreadId }]);
+      if (!payloadOverride) {
+        setComposer("");
+        setAttachments([]);
+        setSelectedSkills([]);
+      }
+      return;
+    }
+    if (sendingRef.current) return;
+    if (!payloadOverride) {
+      setComposer("");
+      setAttachments([]);
+      setSelectedSkills([]);
+    }
+    await startMessage(payload, payload.fromQueue ? selectedThreadId : undefined);
+  }
+
+  useEffect(() => {
+    if (turnRunning || sending || !selectedThreadId) return;
+    const next = queuedMessages.find((item) => item.threadId === selectedThreadId);
+    if (!next) return;
+    setQueuedMessages((current) => current.filter((item) => item.id !== next.id));
+    void startMessage({ ...next, fromQueue: true }, next.threadId);
+  }, [queuedMessages, selectedThreadId, sending, turnRunning]);
+
+  function resendUserMessage(item: ThreadItem) {
+    void sendMessage(outgoingFromItem(item, availableSkills));
+  }
+
+  function regenerateMessage(item: ThreadItem) {
+    const index = items.findIndex((entry) => entry.id === item.id);
+    const userItem = items.slice(0, index).reverse().find((entry) => entry.type === "userMessage");
+    if (!userItem) return;
+    void editAndBranch(userItem, outgoingFromItem(userItem, availableSkills).text, true);
+  }
+
+  async function editAndBranch(item: ThreadItem, preset?: string, skipPrompt = false) {
+    if (!selectedThread || !item.turnId || turnRunningRef.current || sendingRef.current) {
+      setFatalError(turnRunningRef.current || sendingRef.current ? "请先等待当前回复结束，再编辑或重新生成。" : "这条历史消息缺少轮次信息，无法从这里创建分支。");
+      return;
+    }
+    const original = outgoingFromItem(item, availableSkills);
+    const edited = skipPrompt ? (preset ?? original.text) : window.prompt("编辑消息并从这里创建新分支", preset ?? original.text);
+    if (edited === null || !edited.trim()) return;
+    sendingRef.current = true;
+    setSending(true);
+    setFatalError("");
+    try {
+      const result = await api<{ thread: Thread; approvalPolicy?: ApprovalPolicy }>(`/api/threads/${selectedThread.id}/fork`, {
+        method: "POST",
+        body: JSON.stringify({ beforeTurnId: item.turnId }),
+      });
+      const forked = { ...result.thread, approvalPolicy: result.approvalPolicy ?? selectedApprovalPolicy };
+      setThreads((current) => [forked, ...current.filter((thread) => thread.id !== forked.id)]);
+      setSelectedThreadId(forked.id);
+      selectedThreadRef.current = forked.id;
+      setItems(transcript(forked));
+      localStorage.setItem(selectionKey(selectedProject?.id ?? null, forked.id), JSON.stringify({ providerId: selectedProviderId, model: selectedModel, effort: selectedEffort }));
+      sendingRef.current = false;
+      setSending(false);
+      await startMessage({ ...original, text: edited.trim() }, forked.id);
+    } catch (reason) {
+      setFatalError(reason instanceof Error ? `创建分支失败：${reason.message}` : "创建分支失败");
+    } finally {
+      sendingRef.current = false;
       setSending(false);
     }
   }
@@ -620,6 +747,68 @@ export default function App() {
     await api(`/api/threads/${selectedThreadId}/interrupt`, { method: "POST", body: JSON.stringify({ turnId: activeTurnId }) });
   }
 
+  async function renameThread(thread: Thread) {
+    const name = window.prompt("重命名会话", threadTitle(thread));
+    if (name === null || !name.trim()) return;
+    try {
+      const result = await api<{ thread: { name: string } }>(`/api/threads/${thread.id}`, { method: "PATCH", body: JSON.stringify({ name: name.trim() }) });
+      setThreads((current) => current.map((item) => item.id === thread.id ? { ...item, name: result.thread.name } : item));
+    } catch (reason) {
+      setFatalError(reason instanceof Error ? reason.message : "会话重命名失败");
+    }
+  }
+
+  async function toggleThreadPin(thread: Thread) {
+    try {
+      const result = await api<{ thread: { pinned: boolean } }>(`/api/threads/${thread.id}`, { method: "PATCH", body: JSON.stringify({ pinned: !thread.pinned }) });
+      setThreads((current) => current
+        .map((item) => item.id === thread.id ? { ...item, pinned: result.thread.pinned } : item)
+        .sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) || (right.updatedAt ?? 0) - (left.updatedAt ?? 0)));
+    } catch (reason) {
+      setFatalError(reason instanceof Error ? reason.message : "会话置顶失败");
+    }
+  }
+
+  async function archiveThread(thread: Thread) {
+    if (thread.id === selectedThreadId && turnRunning) {
+      setFatalError("当前会话还在运行，请先停止后再归档。");
+      return;
+    }
+    try {
+      await api(`/api/threads/${thread.id}/archive`, { method: "POST", body: "{}" });
+      setThreads((current) => current.filter((item) => item.id !== thread.id));
+      setQueuedMessages((current) => current.filter((item) => item.threadId !== thread.id));
+      if (thread.id === selectedThreadId) {
+        setSelectedThreadId(null);
+        selectedThreadRef.current = null;
+        setItems([]);
+      }
+    } catch (reason) {
+      setFatalError(reason instanceof Error ? reason.message : "会话归档失败");
+    }
+  }
+
+  async function restoreThread(thread: Thread) {
+    try {
+      await api(`/api/threads/${thread.id}/unarchive`, { method: "POST", body: "{}" });
+      setThreads((current) => current.filter((item) => item.id !== thread.id));
+    } catch (reason) {
+      setFatalError(reason instanceof Error ? reason.message : "恢复会话失败");
+      throw reason;
+    }
+  }
+
+  async function selectSearchResult(thread: Thread) {
+    if (!bootstrap) return;
+    const project = bootstrap.projects.find((item) => item.id === thread.projectId)
+      ?? bootstrap.projects.find((item) => item.path.replaceAll("\\", "/").toLowerCase() === thread.cwd?.replaceAll("\\", "/").replace(/^\/\/\?\//, "").toLowerCase());
+    if (!project) throw new Error("这个会话所属项目已从工作台移除，请先重新添加项目目录。");
+    if (thread.archived) await restoreThread(thread);
+    setShowArchived(false);
+    setSelectedProjectId(project.id);
+    await openThread({ ...thread, archived: false }, project);
+  }
+
   async function deleteThread(thread: Thread) {
     if (thread.id === selectedThreadId && turnRunning) {
       setFatalError("当前会话还在运行，请先停止后再删除");
@@ -630,8 +819,10 @@ export default function App() {
       await api(`/api/threads/${thread.id}`, { method: "DELETE" });
       localStorage.removeItem(selectionKey(selectedProject?.id ?? null, thread.id));
       setThreads((current) => current.filter((item) => item.id !== thread.id));
+      setQueuedMessages((current) => current.filter((item) => item.threadId !== thread.id));
       if (thread.id === selectedThreadId) {
         setSelectedThreadId(null);
+        selectedThreadRef.current = null;
         setItems([]);
         setPendingRequests([]);
         setAttachments([]);
@@ -714,19 +905,19 @@ export default function App() {
       <aside className={`threads-panel ${mobileThreads ? "mobile-open" : ""}`}>
         <header className="threads-header">
           <div><small>当前项目</small><strong>{selectedProject?.name || "选择项目"}</strong></div>
-          <div className="header-actions"><button className="icon-button" disabled={!selectedProject || bootstrap.bridge.status !== "ready"} onClick={() => void createThread(true)} aria-label="新会话"><MessageSquarePlus size={18} /></button><button className="icon-button mobile-only" onClick={() => setMobileThreads(false)} aria-label="关闭会话栏"><X size={18} /></button></div>
+          <div className="header-actions"><button className="icon-button" onClick={() => setGlobalSearchOpen(true)} aria-label="搜索所有会话" title="搜索所有会话"><Search size={17} /></button><button className={`icon-button ${showArchived ? "active-tool" : ""}`} disabled={!selectedProject} onClick={() => setShowArchived((value) => !value)} aria-label={showArchived ? "查看当前会话" : "查看归档会话"} title={showArchived ? "返回当前会话" : "归档会话"}><Archive size={17} /></button><button className="icon-button" disabled={!selectedProject || bootstrap.bridge.status !== "ready" || showArchived} onClick={() => void createThread(true)} aria-label="新会话"><MessageSquarePlus size={18} /></button><button className="icon-button mobile-only" onClick={() => setMobileThreads(false)} aria-label="关闭会话栏"><X size={18} /></button></div>
         </header>
         <div className="thread-search"><Search size={15} /><input value={threadSearch} onChange={(event) => setThreadSearch(event.target.value)} placeholder="搜索会话" /></div>
         <nav className="thread-list">
           {visibleThreads.map((thread) => (
-            <div key={thread.id} className={`thread-row ${thread.id === selectedThreadId ? "active" : ""}`}>
+            <div key={thread.id} className={`thread-row ${thread.id === selectedThreadId ? "active" : ""} ${thread.pinned ? "pinned" : ""}`}>
               <button className="thread-button" onClick={() => void openThread(thread)}>
                 <span className="thread-title">{threadTitle(thread)}</span><span className="thread-meta">{friendlyTime(thread.updatedAt || thread.createdAt)}</span>
               </button>
-              <button className="thread-delete" disabled={thread.id === selectedThreadId && turnRunning} title="删除会话" aria-label={`删除会话 ${threadTitle(thread)}`} onClick={() => void deleteThread(thread)}><Trash2 size={13} /></button>
+              <ThreadMenu thread={thread} disabled={thread.id === selectedThreadId && turnRunning} onRename={(item) => void renameThread(item)} onTogglePin={(item) => void toggleThreadPin(item)} onArchive={(item) => void archiveThread(item)} onRestore={(item) => void restoreThread(item)} onDelete={(item) => void deleteThread(item)} />
             </div>
           ))}
-          {selectedProject && threads.length === 0 && <div className="empty-threads"><MessageSquarePlus size={22} /><span>这个项目还没有会话</span><button onClick={() => void createThread(true)}>新建会话</button></div>}
+          {selectedProject && threads.length === 0 && <div className="empty-threads">{showArchived ? <Archive size={22} /> : <MessageSquarePlus size={22} />}<span>{showArchived ? "这个项目没有已归档会话" : "这个项目还没有会话"}</span>{!showArchived && <button onClick={() => void createThread(true)}>新建会话</button>}</div>}
         </nav>
       </aside>
 
@@ -735,7 +926,8 @@ export default function App() {
           <div className="mobile-header-buttons"><button className="icon-button" onClick={() => setMobileProjects(true)} aria-label="打开项目栏"><Menu size={19} /></button><button className="icon-button" onClick={() => setMobileThreads(true)} aria-label="打开会话栏"><PanelLeft size={19} /></button></div>
           <button className="icon-button desktop-thread-toggle" onClick={() => setThreadsCollapsed((value) => !value)} title={threadsCollapsed ? "展开会话记录" : "折叠会话记录"} aria-label={threadsCollapsed ? "展开会话记录" : "折叠会话记录"}>{threadsCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</button>
           <div className="conversation-title"><strong>{selectedThread ? threadTitle(selectedThread) : selectedProject?.name || "Codex 工作台"}</strong><span>{selectedProject?.path || "创建或选择一个项目开始"}</span></div>
-          <div className="conversation-tools">
+          <button className="icon-button mobile-tools-button" onClick={() => setMobileToolsOpen((value) => !value)} aria-label="更多会话工具"><MoreHorizontal size={19} /></button>
+          <div className={`conversation-tools ${mobileToolsOpen ? "mobile-open" : ""}`}>
             <label className="approval-policy-picker" title="当前会话的命令审批策略"><ShieldCheck size={15} /><select value={selectedApprovalPolicy} disabled={!selectedProject || turnRunning} onChange={(event) => void selectApprovalPolicy(event.target.value as ApprovalPolicy)}><option value="on-request">需要审批</option><option value="never">自动审批</option></select></label>
             <ModelPicker
               bootstrap={bootstrap}
@@ -762,7 +954,7 @@ export default function App() {
             <div className="welcome-state"><div className="welcome-mark"><Bot size={30} /></div><h1>你的飞牛 Codex 工作台</h1><p>项目、会话和模型配置都留在 NAS 上。先设置 API 令牌和模型，再创建一个项目目录开始工作。</p><div className="welcome-actions"><button className="secondary-button" onClick={() => setModelPickerOpen(true)}>设置令牌与模型</button><button className="primary-button" onClick={() => setProjectDialog(true)}><Plus size={17} /> 创建项目</button></div></div>
           ) : (
             <div className="conversation-inner">
-              <Timeline items={items} streamingItemId={streamingItemId} turnRunning={turnRunning} projectPath={selectedProject.path} onOpenFile={openWorkspaceFile} onSuggestion={(text) => setComposer(text)} />
+              <Timeline key={selectedThreadId ?? "empty"} items={items} streamingItemId={streamingItemId} turnRunning={turnRunning} projectPath={selectedProject.path} onOpenFile={openWorkspaceFile} onSuggestion={(text) => setComposer(text)} onResend={resendUserMessage} onRegenerate={regenerateMessage} onEditBranch={(item) => void editAndBranch(item)} />
               {pendingRequests.filter((request) => !request.params.threadId || request.params.threadId === selectedThreadId).map((request) => <ApprovalCard key={request.id} request={request} onResolved={(id) => setPendingRequests((current) => current.filter((item) => item.id !== id))} />)}
             </div>
           )}
@@ -773,12 +965,13 @@ export default function App() {
         </div>}
 
         <footer className="composer-wrap">
-          <div className={`composer-box ${turnRunning ? "running" : ""}`}>
+          <div className={`composer-box ${turnRunning || sending ? "running" : ""}`}>
             {skillMention && <SkillMentionMenu skills={mentionSkills} activeIndex={Math.min(skillMentionIndex, Math.max(mentionSkills.length - 1, 0))} loading={skillsLoading} error={skillsError} limitReached={selectedSkills.length >= 6} onActiveIndexChange={setSkillMentionIndex} onSelect={selectMentionSkill} onManage={() => { setSkillMention(null); setSkillsDialog(true); }} />}
             {selectedSkills.length > 0 && <div className="selected-skills" aria-label="本条消息强制使用的 Skills">{selectedSkills.map((skill) => <div className="skill-chip" key={skill.path} title="本条消息强制使用"><Sparkles size={13} /><span>@{skill.interface?.displayName || skill.name}</span><button onClick={() => setSelectedSkills((current) => current.filter((item) => item.path !== skill.path))} aria-label={`移除 Skill ${skill.name}`}><X size={12} /></button></div>)}</div>}
             {attachments.length > 0 && <div className="attachment-list">{attachments.map((item) => <div className="attachment-chip" key={item.id}>{item.kind === "image" ? <Image size={14} /> : <FileText size={14} />}<span><strong>{item.name}</strong><small>{Math.max(1, Math.round(item.size / 1024))} KB</small></span><button onClick={() => setAttachments((current) => current.filter((entry) => entry.id !== item.id))} aria-label={`移除 ${item.name}`}><X size={13} /></button></div>)}</div>}
-            <textarea ref={composerRef} value={composer} onChange={handleComposerChange} onSelect={(event) => updateSkillMention(composer, event.currentTarget.selectionStart)} onBlur={() => window.setTimeout(() => setSkillMention(null), 120)} onPaste={(event) => { const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/")); if (images.length > 0) { event.preventDefault(); void addAttachments(images); } }} onKeyDown={handleComposerKeyDown} placeholder={selectedProject ? "告诉 Codex 你想完成什么… 输入 @ 强制使用 Skill" : "请先选择项目"} disabled={!selectedProject || bootstrap.bridge.status !== "ready" || turnRunning} rows={1} />
-            <div className="composer-actions"><div className="composer-left"><input ref={attachmentInputRef} className="sr-only" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.json,.jsonl,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.toml,.ini,.env,.sh,.py,.java,.go,.rs,.sql,.log,.csv" onChange={(event) => void addAttachments(event.target.files)} /><button className="attach-button" disabled={!selectedProject || turnRunning || attachments.length >= 6} onClick={() => attachmentInputRef.current?.click()} title="添加图片或文本/代码文件"><Paperclip size={15} /> <span>附件</span></button><button className="attach-button" disabled={!selectedProject || turnRunning} onClick={() => setSkillsDialog(true)} title="管理允许智能调用的 Skills"><Sparkles size={15} /> <span>Skills</span></button><span>输入 @ 强制使用 Skill · Enter 发送</span></div>{turnRunning ? <button className="stop-button" onClick={() => void interrupt()}><Square size={14} /> 停止</button> : <button className="send-button" onClick={() => void sendMessage()} disabled={(!composer.trim() && attachments.length === 0 && selectedSkills.length === 0) || sending || !selectedProject} aria-label="发送消息"><Send size={17} /></button>}</div>
+            {currentQueuedMessages.length > 0 && <div className="queued-messages"><span>待发送 {currentQueuedMessages.length} 条</span>{currentQueuedMessages.map((item, index) => <div key={item.id}><em>{item.text.trim() || `附件消息 ${index + 1}`}</em><button onClick={() => setQueuedMessages((current) => current.filter((entry) => entry.id !== item.id))} aria-label="取消待发送消息"><X size={12} /></button></div>)}</div>}
+            <textarea ref={composerRef} value={composer} onChange={handleComposerChange} onSelect={(event) => updateSkillMention(composer, event.currentTarget.selectionStart)} onBlur={() => window.setTimeout(() => setSkillMention(null), 120)} onPaste={(event) => { const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/")); if (images.length > 0) { event.preventDefault(); void addAttachments(images); } }} onKeyDown={handleComposerKeyDown} placeholder={turnRunning || sending ? "继续输入，发送后会排队…" : selectedProject ? "告诉 Codex 你想完成什么… 输入 @ 强制使用 Skill" : "请先选择项目"} disabled={!selectedProject || bootstrap.bridge.status !== "ready"} rows={1} />
+            <div className="composer-actions"><div className="composer-left"><input ref={attachmentInputRef} className="sr-only" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.json,.jsonl,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.toml,.ini,.env,.sh,.py,.java,.go,.rs,.sql,.log,.csv" onChange={(event) => void addAttachments(event.target.files)} /><button className="attach-button" disabled={!selectedProject || attachments.length >= 6} onClick={() => attachmentInputRef.current?.click()} title="添加图片或文本/代码文件"><Paperclip size={15} /> <span>附件</span></button><button className="attach-button" disabled={!selectedProject} onClick={() => setSkillsDialog(true)} title="管理允许智能调用的 Skills"><Sparkles size={15} /> <span>Skills</span></button><span>{turnRunning || sending ? "当前回复完成后自动发送" : "输入 @ 强制使用 Skill · Enter 发送"}</span></div><div className="composer-right">{turnRunning && <button className="stop-button" onClick={() => void interrupt()}><Square size={14} /> 停止</button>}<button className="send-button" onClick={() => void sendMessage()} disabled={(!composer.trim() && attachments.length === 0 && selectedSkills.length === 0) || !selectedProject} aria-label={turnRunning || sending ? "加入待发送队列" : "发送消息"}><Send size={17} /></button></div></div>
           </div>
           <small className="composer-note">Codex 可能会出错，请在执行重要操作前检查文件变更和命令。</small>
         </footer>
@@ -787,7 +980,9 @@ export default function App() {
       {workspacePanel && selectedProject && <WorkspacePanel project={selectedProject} items={items} requestedFile={workspaceFileRequest} onClose={() => setWorkspacePanel(false)} />}
 
       {(mobileProjects || mobileThreads) && <div className="mobile-scrim" onClick={() => { setMobileProjects(false); setMobileThreads(false); }} />}
+      {mobileToolsOpen && <button className="mobile-tools-scrim" onClick={() => setMobileToolsOpen(false)} aria-label="关闭更多会话工具" />}
       <ProjectDialog open={projectDialog} bootstrap={bootstrap} onClose={() => setProjectDialog(false)} onCreated={loadBootstrap} />
+      <GlobalSearchDialog open={globalSearchOpen} onClose={() => setGlobalSearchOpen(false)} onSelect={selectSearchResult} />
       <SettingsDialog open={settingsDialog} bootstrap={bootstrap} onClose={() => setSettingsDialog(false)} onChanged={loadBootstrap} />
       <SkillsDialog open={skillsDialog} project={selectedProject} revision={skillsRevision} onSkillsChange={updateAvailableSkills} onClose={() => setSkillsDialog(false)} />
     </div>

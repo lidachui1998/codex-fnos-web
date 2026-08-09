@@ -9,7 +9,39 @@ function textContent(content) {
     .join("");
 }
 
-export function responsesToChat(body, fallbackModel) {
+function inferredReasoningProfile(profile, model) {
+  if (profile && profile !== "auto") return profile;
+  const value = String(model || "").toLowerCase();
+  if (value.includes("claude")) return "anthropic";
+  if (value.includes("deepseek")) return "deepseek";
+  if (/qwen|qwq/.test(value)) return "qwen";
+  if (/kimi|moonshot/.test(value)) return "kimi";
+  if (/glm|chatglm/.test(value)) return "glm";
+  if (/gemini/.test(value)) return "gemini";
+  if (/gpt|o[134](?:-|$)/.test(value)) return "openai";
+  return "generic";
+}
+
+function reasoningFields(body, fallbackModel, profile) {
+  const effort = body.reasoning?.effort ?? body.reasoning_effort;
+  if (!effort || profile === "none") return {};
+  const resolved = inferredReasoningProfile(profile, body.model || fallbackModel);
+  if (resolved === "deepseek") {
+    if (effort === "none") return { thinking: { type: "disabled" } };
+    return {
+      thinking: { type: "enabled" },
+      reasoning_effort: ["xhigh", "max", "ultra"].includes(effort) ? "max" : "high",
+    };
+  }
+  if (["qwen", "kimi", "glm", "gemini"].includes(resolved)) {
+    return effort === "none"
+      ? { enable_thinking: false }
+      : { enable_thinking: true, reasoning_effort: effort === "minimal" ? "low" : effort };
+  }
+  return effort === "none" ? {} : { reasoning_effort: effort };
+}
+
+export function responsesToChat(body, fallbackModel, reasoningProfile = "auto") {
   const messages = [];
   if (body.instructions) messages.push({ role: "system", content: String(body.instructions) });
   const input = typeof body.input === "string"
@@ -61,6 +93,7 @@ export function responsesToChat(body, fallbackModel) {
     stream_options: body.stream === false ? undefined : { include_usage: true },
     temperature: body.temperature,
     max_tokens: body.max_output_tokens,
+    ...reasoningFields(body, fallbackModel, reasoningProfile),
   };
 }
 

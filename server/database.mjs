@@ -36,6 +36,7 @@ export function openDatabase(path) {
       headers_encrypted TEXT,
       proxy_profile_id TEXT REFERENCES proxy_profiles(id) ON DELETE SET NULL,
       proxy_mode TEXT NOT NULL DEFAULT 'inherit',
+      reasoning_profile TEXT NOT NULL DEFAULT 'auto',
       enabled INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
@@ -60,6 +61,9 @@ export function openDatabase(path) {
     CREATE TABLE IF NOT EXISTS thread_preferences (
       thread_id TEXT PRIMARY KEY,
       approval_policy TEXT NOT NULL CHECK (approval_policy IN ('on-request', 'never')),
+      display_name TEXT,
+      pinned INTEGER NOT NULL DEFAULT 0,
+      deleted INTEGER NOT NULL DEFAULT 0,
       updated_at INTEGER NOT NULL
     );
   `);
@@ -77,6 +81,11 @@ export function openDatabase(path) {
   }
   const providerColumns = new Set(db.prepare("PRAGMA table_info(provider_profiles)").all().map((column) => column.name));
   if (!providerColumns.has("proxy_mode")) db.exec("ALTER TABLE provider_profiles ADD COLUMN proxy_mode TEXT NOT NULL DEFAULT 'inherit'");
+  if (!providerColumns.has("reasoning_profile")) db.exec("ALTER TABLE provider_profiles ADD COLUMN reasoning_profile TEXT NOT NULL DEFAULT 'auto'");
+  const threadColumns = new Set(db.prepare("PRAGMA table_info(thread_preferences)").all().map((column) => column.name));
+  if (!threadColumns.has("display_name")) db.exec("ALTER TABLE thread_preferences ADD COLUMN display_name TEXT");
+  if (!threadColumns.has("pinned")) db.exec("ALTER TABLE thread_preferences ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
+  if (!threadColumns.has("deleted")) db.exec("ALTER TABLE thread_preferences ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0");
   db.exec(`
     UPDATE proxy_profiles SET http_url_encrypted = url_encrypted, http_url_hint = url_hint
       WHERE kind = 'http' AND http_url_encrypted IS NULL;

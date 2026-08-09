@@ -22,6 +22,18 @@ function filterThreadsByCwd(result, cwd) {
 
 const reasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 const imageDataUrl = /^data:image\/(png|jpeg|webp|gif);base64,([a-z\d+/=]+)$/i;
+const threadSourceKinds = [
+  "cli",
+  "vscode",
+  "exec",
+  "appServer",
+  "subAgent",
+  "subAgentReview",
+  "subAgentCompact",
+  "subAgentThreadSpawn",
+  "subAgentOther",
+  "unknown",
+];
 
 function buildTurnInput(input, availableSkills = []) {
   const result = [];
@@ -83,6 +95,19 @@ function publicCodexStatus(value) {
 export function createApiHandler({ stores, bridge, queueBridgeRestart, appearance, updater, workspace, skills }) {
   const findProject = (id) => stores.listProjects().find((item) => item.id === id);
   const findProvider = (id) => stores.listProviders().find((item) => item.id === id);
+  const decorateThread = (thread, extra = {}) => {
+    const preferences = stores.getThreadPreferences(thread.id);
+    return {
+      ...thread,
+      ...extra,
+      approvalPolicy: preferences?.approvalPolicy ?? undefined,
+      name: preferences?.name ?? undefined,
+      pinned: preferences?.pinned ?? false,
+    };
+  };
+  const sortThreads = (threads) => [...threads].sort((left, right) =>
+    Number(Boolean(right.pinned)) - Number(Boolean(left.pinned))
+      || Number(right.updatedAt ?? right.createdAt ?? 0) - Number(left.updatedAt ?? left.createdAt ?? 0));
 
   return async function handleApi(req, res, url) {
     const { pathname, searchParams } = url;
@@ -97,7 +122,7 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
         }
       }
       sendJson(res, 200, {
-        version: "0.4.1",
+        version: "0.5.0",
         providers: stores.listProviders(),
         proxies: stores.listProxies(),
         projects: stores.listProjects(),
@@ -352,34 +377,69 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
       return;
     }
 
+    if (req.method === "GET" && pathname === "/api/threads/search") {
+      const query = String(searchParams.get("query") || "").trim();
+      if (!query) return sendJson(res, 200, { data: [] });
+      const list = async (archived, searchTerm) => bridge.request("thread/list", {
+        limit: 100,
+        archived,
+        searchTerm,
+        modelProviders: [],
+        sourceKinds: threadSourceKinds,
+      });
+      const [active, archived, allActive, allArchived] = await Promise.all([
+        list(false, query),
+        list(true, query),
+        list(false, undefined),
+        list(true, undefined),
+      ]);
+      const projects = stores.listProjects();
+      const decorateSearchResult = (thread, isArchived) => {
+        const project = projects.find((item) => normalizeThreadCwd(item.path) === normalizeThreadCwd(thread.cwd));
+        return decorateThread(thread, {
+          archived: isArchived,
+          projectId: project?.id,
+          projectName: project?.name,
+        });
+      };
+      const decorated = [
+        ...(active.data ?? []).map((thread) => decorateSearchResult(thread, false)),
+        ...(archived.data ?? []).map((thread) => decorateSearchResult(thread, true)),
+        ...(allActive.data ?? []).map((thread) => decorateSearchResult(thread, false)),
+        ...(allArchived.data ?? []).map((thread) => decorateSearchResult(thread, true)),
+      ];
+      const normalizedQuery = query.toLocaleLowerCase();
+      const unique = new Map();
+      for (const thread of decorated) {
+        if (stores.getThreadPreferences(thread.id)?.deleted) continue;
+        const matchesLocal = `${thread.name ?? ""}\n${thread.preview ?? ""}`.toLocaleLowerCase().includes(normalizedQuery);
+        const matchedByServer = (active.data ?? []).some((item) => item.id === thread.id)
+          || (archived.data ?? []).some((item) => item.id === thread.id);
+        if ((matchesLocal || matchedByServer) && !unique.has(thread.id)) unique.set(thread.id, thread);
+      }
+      sendJson(res, 200, { data: sortThreads([...unique.values()]) });
+      return;
+    }
     if (req.method === "GET" && pathname === "/api/threads") {
       const cwd = searchParams.get("cwd") || undefined;
+      const archived = searchParams.get("archived") === "1";
       const result = await bridge.request("thread/list", {
         limit: 100,
-        archived: false,
+        archived,
         // An empty provider list means "all providers". Without it, app-server
         // silently limits results to its process-level default provider and hides
         // threads created with a third-party provider override.
         modelProviders: [],
-        sourceKinds: [
-          "cli",
-          "vscode",
-          "exec",
-          "appServer",
-          "subAgent",
-          "subAgentReview",
-          "subAgentCompact",
-          "subAgentThreadSpawn",
-          "subAgentOther",
-          "unknown",
-        ],
+        sourceKinds: threadSourceKinds,
       });
       // Filter after listing. On Windows, Codex persists canonical cwd values
       // with a \\?\ prefix, which does not match thread/list's SQL cwd filter.
       const filtered = filterThreadsByCwd(result, cwd);
       sendJson(res, 200, {
         ...filtered,
-        data: filtered.data?.map((thread) => ({ ...thread, approvalPolicy: stores.getThreadApprovalPolicy(thread.id) ?? undefined })) ?? [],
+        data: sortThreads(filtered.data
+          ?.filter((thread) => !stores.getThreadPreferences(thread.id)?.deleted)
+          .map((thread) => decorateThread(thread, { archived })) ?? []),
       });
       return;
     }
@@ -412,8 +472,17 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
     params = route(req.method, pathname, { method: "DELETE", path: /^\/api\/threads\/(?<id>[^/]+)$/ });
     if (params) {
       await bridge.request("thread/archive", { threadId: params.id });
-      stores.deleteThreadPreferences(params.id);
+      stores.saveThreadDeleted(params.id);
       sendJson(res, 200, { deleted: true });
+      return;
+    }
+    params = route(req.method, pathname, { method: "PATCH", path: /^\/api\/threads\/(?<id>[^/]+)$/ });
+    if (params) {
+      const input = await readJson(req);
+      const result = {};
+      if (Object.hasOwn(input, "name")) result.name = stores.saveThreadDisplayName(params.id, input.name);
+      if (Object.hasOwn(input, "pinned")) result.pinned = stores.saveThreadPinned(params.id, Boolean(input.pinned));
+      sendJson(res, 200, { thread: { id: params.id, ...result } });
       return;
     }
     params = route(req.method, pathname, { method: "POST", path: /^\/api\/threads\/(?<id>[^/]+)\/resume$/ });
@@ -423,7 +492,11 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
       if (approvalPolicy && approvalPolicy !== result.approvalPolicy) {
         await bridge.request("thread/settings/update", { threadId: params.id, approvalPolicy });
       }
-      sendJson(res, 200, { ...result, approvalPolicy: approvalPolicy ?? result.approvalPolicy });
+      sendJson(res, 200, {
+        ...result,
+        thread: decorateThread(result.thread),
+        approvalPolicy: approvalPolicy ?? result.approvalPolicy,
+      });
       return;
     }
     params = route(req.method, pathname, { method: "PATCH", path: /^\/api\/threads\/(?<id>[^/]+)\/settings$/ });
@@ -441,7 +514,12 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
     }
     params = route(req.method, pathname, { method: "POST", path: /^\/api\/threads\/(?<id>[^/]+)\/fork$/ });
     if (params) {
-      const result = await bridge.request("thread/fork", { threadId: params.id });
+      const input = await readJson(req);
+      const result = await bridge.request("thread/fork", {
+        threadId: params.id,
+        lastTurnId: input.lastTurnId || undefined,
+        beforeTurnId: input.beforeTurnId || undefined,
+      });
       const approvalPolicy = stores.getThreadApprovalPolicy(params.id);
       if (approvalPolicy && result.thread?.id) stores.saveThreadApprovalPolicy(result.thread.id, approvalPolicy);
       sendJson(res, 201, result);
@@ -450,6 +528,11 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
     params = route(req.method, pathname, { method: "POST", path: /^\/api\/threads\/(?<id>[^/]+)\/archive$/ });
     if (params) {
       sendJson(res, 200, await bridge.request("thread/archive", { threadId: params.id }));
+      return;
+    }
+    params = route(req.method, pathname, { method: "POST", path: /^\/api\/threads\/(?<id>[^/]+)\/unarchive$/ });
+    if (params) {
+      sendJson(res, 200, await bridge.request("thread/unarchive", { threadId: params.id }));
       return;
     }
     params = route(req.method, pathname, { method: "POST", path: /^\/api\/threads\/(?<id>[^/]+)\/turns$/ });

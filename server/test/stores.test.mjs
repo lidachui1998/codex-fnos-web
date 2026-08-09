@@ -96,6 +96,37 @@ test("approval policy is persisted independently for each thread", () => {
   });
 });
 
+test("thread names and pins persist without overwriting approval preferences", () => {
+  withStores(({ stores }) => {
+    stores.saveThreadApprovalPolicy("thread-a", "never");
+    stores.saveThreadDisplayName("thread-a", "重要会话");
+    stores.saveThreadPinned("thread-a", true);
+    assert.deepEqual(stores.getThreadPreferences("thread-a"), {
+      approvalPolicy: "never",
+      name: "重要会话",
+      pinned: true,
+      deleted: false,
+      updatedAt: stores.getThreadPreferences("thread-a").updatedAt,
+    });
+  });
+});
+
+test("deleted threads keep an independent hidden marker", () => {
+  withStores(({ stores }) => {
+    stores.saveThreadApprovalPolicy("thread-deleted", "on-request");
+    stores.saveThreadDisplayName("thread-deleted", "Old chat");
+    stores.saveThreadPinned("thread-deleted", true);
+    stores.saveThreadDeleted("thread-deleted");
+    assert.deepEqual(stores.getThreadPreferences("thread-deleted"), {
+      approvalPolicy: "on-request",
+      name: "Old chat",
+      pinned: false,
+      deleted: true,
+      updatedAt: stores.getThreadPreferences("thread-deleted").updatedAt,
+    });
+  });
+});
+
 test("one proxy profile stores all protocols and providers can force direct mode", () => {
   withStores(({ stores }) => {
     const proxy = stores.saveProxy({
@@ -127,8 +158,10 @@ test("one proxy profile stores all protocols and providers can force direct mode
       baseUrl: "https://api.example.com/v1",
       model: "coder",
       proxyMode: "inherit",
+      reasoningProfile: "deepseek",
     });
     assert.equal(stores.getEffectiveProxy(stores.getProviderSecret(directProvider.id)), null);
     assert.equal(stores.getEffectiveProxy(stores.getProviderSecret(inheritedProvider.id)).socks5_url, "socks5://127.0.0.1:1080");
+    assert.equal(stores.listProviders().find((provider) => provider.id === inheritedProvider.id).reasoningProfile, "deepseek");
   });
 });

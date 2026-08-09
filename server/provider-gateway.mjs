@@ -33,7 +33,7 @@ export async function handleProviderGateway(req, res, stores, token, providerId)
     return;
   }
 
-  const chatBody = responsesToChat(body, provider.model);
+  const chatBody = responsesToChat(body, provider.model, provider.reasoning_profile || "auto");
   const upstream = await requestChatCompletions(provider, proxy, chatBody);
   if (!upstream.ok) {
     const details = (await upstream.text()).slice(0, 2000);

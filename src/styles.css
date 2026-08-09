@@ -411,6 +411,118 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .unlock-card h1 { font-size: 25px; }
 }
 
+/* v0.5 conversation management and ChatGPT-inspired polish */
+.mobile-tools-button { display: none; }
+.workspace-header { position: relative; z-index: 20; height: 64px; padding: 0 18px; gap: 8px; background: color-mix(in srgb, var(--paper) 94%, transparent); backdrop-filter: blur(16px) saturate(1.2); }
+.conversation-title strong { font-size: 14.5px; letter-spacing: -.015em; }
+.conversation-tools { flex: none; }
+
+.thread-row.pinned .thread-title::before { content: "•"; margin-right: 5px; color: var(--accent); }
+.thread-row .thread-button { padding-right: 38px; }
+.thread-menu-wrap { position: absolute; z-index: 5; top: 50%; right: 5px; transform: translateY(-50%); }
+.thread-menu-button { width: 27px; height: 27px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 7px; background: transparent; color: var(--faint); cursor: pointer; opacity: 0; }
+.thread-row:hover .thread-menu-button, .thread-row.active .thread-menu-button, .thread-menu-button:focus-visible, .thread-menu-button[aria-expanded="true"] { opacity: 1; }
+.thread-menu-button:hover { background: var(--panel-strong); color: var(--ink); }
+.thread-menu-scrim { position: fixed; z-index: 63; inset: 0; padding: 0; border: 0; background: transparent; }
+.thread-menu { position: absolute; z-index: 64; top: 31px; right: 0; width: 158px; display: flex; flex-direction: column; gap: 2px; padding: 5px; border: 1px solid var(--line); border-radius: 11px; background: var(--paper); box-shadow: var(--shadow); }
+.thread-menu > button { min-height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 9px; border: 0; border-radius: 7px; background: transparent; color: var(--ink); cursor: pointer; font-size: 10.5px; text-align: left; }
+.thread-menu > button:hover { background: var(--panel); }
+.thread-menu > button.danger { color: var(--red); }
+
+.global-search { display: grid; grid-template-rows: auto minmax(0,1fr); gap: 12px; min-height: 360px; }
+.global-search-input { height: 44px; display: flex; align-items: center; gap: 9px; padding: 0 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--muted); }
+.global-search-input:focus-within { border-color: color-mix(in srgb,var(--accent) 55%,var(--line)); box-shadow: 0 0 0 3px var(--accent-soft); }
+.global-search-input input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--ink); font-size: 12px; }
+.global-search-input .spin { animation: spin 1.2s linear infinite; }
+.global-search-results { min-height: 0; max-height: 54vh; overflow-y: auto; }
+.global-search-results > button { width: 100%; min-height: 59px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 11px; border: 0; border-radius: 10px; background: transparent; color: var(--ink); cursor: pointer; text-align: left; }
+.global-search-results > button:hover { background: var(--panel); }
+.global-search-results span { min-width: 0; }
+.global-search-results strong, .global-search-results small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.global-search-results strong { font-size: 11.5px; }
+.global-search-results small { margin-top: 4px; color: var(--muted); font-size: 8.5px; }
+.global-search-results em { flex: none; display: flex; align-items: center; gap: 4px; color: var(--faint); font-size: 8px; font-style: normal; }
+.global-search-empty { padding: 52px 14px; color: var(--muted); font-size: 10px; text-align: center; }
+
+.conversation-inner { width: min(860px, calc(100% - 40px)); padding-top: 38px; }
+.timeline { gap: 25px; }
+.message, .tool-item, .reasoning-row { content-visibility: auto; contain-intrinsic-size: auto 160px; }
+.message-body { max-width: min(100%, 790px); }
+.message-label { margin-bottom: 7px; font-size: 9px; letter-spacing: .08em; }
+.user-message { grid-template-columns: minmax(0,1fr) 29px; }
+.user-message .message-avatar { grid-column: 2; grid-row: 1; }
+.user-message .message-body { grid-column: 1; grid-row: 1; justify-self: end; display: flex; flex-direction: column; align-items: flex-end; }
+.user-message .message-text { max-width: min(660px,100%); padding: 11px 15px; border: 1px solid color-mix(in srgb,var(--line) 80%,transparent); border-radius: 18px 18px 5px 18px; background: var(--panel); line-height: 1.62; box-shadow: 0 1px 2px rgba(0,0,0,.03); }
+.agent-message .message-body { padding: 3px 3px 0 0; }
+.agent-message .message-text { line-height: 1.75; }
+.message-actions { min-height: 25px; display: flex; align-items: center; gap: 2px; margin-top: 7px; opacity: 0; transform: translateY(-2px); transition: opacity .15s, transform .15s; }
+.message:hover .message-actions, .message:focus-within .message-actions { opacity: 1; transform: none; }
+.message-actions button { height: 25px; display: inline-flex; align-items: center; gap: 5px; padding: 0 7px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; font-size: 8.5px; }
+.message-actions button:hover:not(:disabled) { background: var(--panel); color: var(--ink); }
+.message-actions button:disabled { opacity: .35; cursor: default; }
+.user-message .message-actions { justify-content: flex-end; }
+.load-earlier { align-self: center; min-height: 31px; display: inline-flex; align-items: center; gap: 6px; padding: 0 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--muted); cursor: pointer; font-size: 9px; box-shadow: 0 2px 8px rgba(0,0,0,.05); }
+.load-earlier:hover { background: var(--panel); color: var(--ink); }
+.tool-item { border-radius: 12px; background: color-mix(in srgb,var(--panel) 74%,transparent); }
+.tool-summary { min-height: 44px; }
+
+.composer-wrap { position: relative; z-index: 18; padding-top: 16px; background: linear-gradient(to top, var(--paper) 74%, transparent); }
+.composer-box { width: min(860px,100%); padding: 11px 12px 9px 15px; border-radius: 25px; background: color-mix(in srgb,var(--paper) 96%,transparent); box-shadow: 0 8px 30px rgba(0,0,0,.10); backdrop-filter: blur(18px); }
+.composer-box textarea { min-height: 30px; padding: 2px 2px 5px; font-size: 13.5px; }
+.composer-right { display: flex; align-items: center; gap: 7px; }
+.queued-messages { display: flex; flex-direction: column; gap: 4px; margin: -2px 0 8px; padding: 7px; border-radius: 11px; background: var(--accent-soft); }
+.queued-messages > span { color: var(--accent-dark); font-size: 8px; font-weight: 800; }
+.queued-messages > div { min-width: 0; height: 27px; display: flex; align-items: center; gap: 7px; padding: 0 5px 0 8px; border-radius: 7px; background: color-mix(in srgb,var(--paper) 72%,transparent); }
+.queued-messages em { min-width: 0; flex: 1; overflow: hidden; color: var(--muted); font-size: 8.5px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.queued-messages button { width: 21px; height: 21px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+
+.app-shell.has-background { background-color: var(--bg); background-image: none; }
+.app-shell.has-background::before { content: ""; position: absolute; z-index: 0; inset: 0; background-image: var(--workspace-background); background-position: center; background-size: cover; opacity: var(--background-opacity); pointer-events: none; }
+.app-shell.has-background .workspace { position: relative; z-index: 1; }
+.app-shell.has-background .projects-panel, .app-shell.has-background .threads-panel { background: color-mix(in srgb,var(--panel) 88%,transparent); backdrop-filter: blur(14px); }
+.app-shell.has-background .workspace { background: color-mix(in srgb,var(--paper) 76%,transparent); backdrop-filter: blur(7px); }
+.app-shell.has-background .workspace-header { background: color-mix(in srgb,var(--paper) 90%,transparent); }
+.app-shell.has-background .composer-wrap { background: linear-gradient(to top,color-mix(in srgb,var(--paper) 94%,transparent) 72%,transparent); }
+
+@media (max-width: 860px) {
+  .workspace-header { height: 58px; padding: 0 9px; }
+  .mobile-tools-button { display: inline-grid; flex: none; }
+  .conversation-title span { display: none; }
+  .conversation-title strong { font-size: 12px; }
+  .conversation-tools { position: fixed; z-index: 72; top: calc(58px + env(safe-area-inset-top)); right: 8px; width: min(330px,calc(100vw - 16px)); display: none; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 6px; padding: 9px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); box-shadow: var(--shadow); }
+  .conversation-tools.mobile-open { display: grid; }
+  .conversation-tools .approval-policy-picker, .conversation-tools .model-picker-wrap { grid-column: span 2; width: 100%; }
+  .conversation-tools .provider-pill, .conversation-tools .approval-policy-picker { width: 100%; }
+  .conversation-tools > .icon-button { width: 100%; background: var(--panel); }
+  .mobile-tools-scrim { position: fixed; z-index: 70; inset: 0; padding: 0; border: 0; background: rgba(0,0,0,.18); backdrop-filter: blur(1px); }
+  .model-picker { position: fixed; top: 66px; right: 8px; left: 8px; width: auto; }
+  .conversation-inner { width: min(100% - 22px,860px); padding: 25px 0 38px; }
+  .message-actions { opacity: 1; transform: none; }
+  .thread-menu-button { opacity: .82; }
+}
+
+@media (max-width: 560px) {
+  .workspace-header { padding: 0 7px; gap: 3px; }
+  .mobile-header-buttons { gap: 1px; }
+  .mobile-header-buttons .icon-button, .mobile-tools-button { width: 32px; height: 32px; }
+  .conversation-title { padding-left: 3px; }
+  .conversation-title strong { max-width: 30vw; }
+  .conversation-tools.mobile-open > * { display: flex; }
+  .conversation-tools.mobile-open > .icon-button { display: inline-grid; }
+  .approval-policy-picker select { min-width: 0; }
+  .message { grid-template-columns: 25px minmax(0,1fr); gap: 9px; }
+  .user-message { grid-template-columns: minmax(0,1fr) 25px; }
+  .user-message .message-text { max-width: calc(100vw - 64px); }
+  .message-label { margin-bottom: 5px; }
+  .message-actions { flex-wrap: wrap; margin-top: 5px; }
+  .message-actions button { padding: 0 5px; }
+  .composer-wrap { padding: 8px 8px max(9px,env(safe-area-inset-bottom)); }
+  .composer-box { padding: 9px 9px 7px 12px; border-radius: 21px; }
+  .stop-button { width: 31px; padding: 0; font-size: 0; }
+  .stop-button svg { margin: 0; }
+  .global-search { min-height: 300px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .001ms !important; transition-duration: .001ms !important; }
 }
@@ -699,4 +811,19 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .skill-mention-menu > header small, .skill-mention-menu > footer span { display: none; }
   .skill-mention-list > button { grid-template-columns: 30px minmax(0,1fr); }
   .skill-mention-list > button em { grid-column: 2; }
+}
+
+/* Keep the wallpaper behind readable surfaces. These rules intentionally sit last. */
+.app-shell.has-background { background-color: var(--bg); background-image: none; }
+.app-shell.has-background::before { content: ""; position: absolute; z-index: 0; inset: 0; background-image: var(--workspace-background); background-position: center; background-size: cover; opacity: var(--background-opacity); pointer-events: none; }
+.app-shell.has-background .workspace { position: relative; z-index: 1; }
+.app-shell.has-background .projects-panel, .app-shell.has-background .threads-panel { background: color-mix(in srgb,var(--panel) 88%,transparent); backdrop-filter: blur(14px); }
+.app-shell.has-background .workspace { background: color-mix(in srgb,var(--paper) 76%,transparent); backdrop-filter: blur(7px); }
+:root[data-theme="dark"] .app-shell.has-background .workspace, :root[data-theme="ink"] .app-shell.has-background .workspace { background: color-mix(in srgb,var(--paper) 82%,transparent); }
+:root[data-theme="dark"] .app-shell.has-background .projects-panel, :root[data-theme="dark"] .app-shell.has-background .threads-panel, :root[data-theme="ink"] .app-shell.has-background .projects-panel, :root[data-theme="ink"] .app-shell.has-background .threads-panel { background: color-mix(in srgb,var(--panel) 90%,transparent); }
+
+@media (max-width: 560px) {
+  .conversation-tools.mobile-open > * { display: flex; }
+  .conversation-tools.mobile-open > .icon-button { display: inline-grid; }
+  .user-message .message-text { max-width: calc(100vw - 64px); }
 }
