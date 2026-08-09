@@ -1,0 +1,134 @@
+#!/bin/bash
+set -u
+
+APP_ID="com.lidachui.codexweb"
+APP_DIR="${TRIM_APPDEST}/server"
+VENDOR_DIR="${TRIM_APPDEST}/vendor/x86_64-unknown-linux-musl"
+STATE_DIR="${TRIM_PKGVAR:-/tmp/${APP_ID}}"
+LOG_DIR="${STATE_DIR}/logs"
+LOG_FILE="${LOG_DIR}/service.log"
+PID_FILE="${STATE_DIR}/app.pid"
+PORT="${TRIM_SERVICE_PORT:-19090}"
+
+mkdir -p "${LOG_DIR}" 2>/dev/null || true
+
+log_msg() {
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "${LOG_FILE}"
+}
+
+node_bin() {
+  for candidate in \
+    "/var/apps/nodejs_v24/target/bin/node" \
+    "/var/packages/nodejs_v24/target/bin/node" \
+    "$(command -v node 2>/dev/null || true)"; do
+    if [ -x "${candidate}" ]; then
+      echo "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+share_dir() {
+  local raw="${TRIM_DATA_SHARE_PATHS:-}"
+  raw="${raw%%:*}"
+  raw="${raw%%;*}"
+  raw="${raw%%,*}"
+  if [ -n "${raw}" ]; then
+    echo "${raw}"
+  else
+    echo "${STATE_DIR}/share"
+  fi
+}
+
+is_running() {
+  [ -f "${PID_FILE}" ] || return 1
+  local pid
+  pid="$(head -n 1 "${PID_FILE}" 2>/dev/null | tr -d '[:space:]')"
+  [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null
+}
+
+start_process() {
+  if is_running; then
+    log_msg "already running"
+    return 0
+  fi
+
+  local node share data workspace codex_bin bundled_version
+  node="$(node_bin || true)"
+  share="$(share_dir)"
+  data="${share}/.codex-system"
+  workspace="${share}/projects"
+  codex_bin="${VENDOR_DIR}/bin/codex"
+  if [ -z "${node}" ]; then
+    log_msg "nodejs_v24 runtime not found"
+    return 1
+  fi
+  if [ ! -f "${APP_DIR}/server/index.mjs" ] || [ ! -f "${APP_DIR}/dist/index.html" ]; then
+    log_msg "application files are missing"
+    return 1
+  fi
+  if [ ! -x "${codex_bin}" ]; then
+    log_msg "bundled Codex binary is missing or not executable"
+    return 1
+  fi
+
+  mkdir -p "${data}/secrets" "${data}/codex-home" "${workspace}" "${STATE_DIR}/home" 2>>"${LOG_FILE}" || true
+  chmod 700 "${data}/secrets" "${data}/codex-home" 2>/dev/null || true
+  export PORT
+  export HOST="0.0.0.0"
+  export NODE_ENV="production"
+  export DATA_DIR="${data}"
+  export WORKSPACE_ROOTS="${workspace}"
+  export CODEX_HOME="${data}/codex-home"
+  export CODEX_BIN="${codex_bin}"
+  bundled_version="$(head -n 1 "${TRIM_APPDEST}/vendor/CODEX_VERSION" 2>/dev/null | tr -d '[:space:]')"
+  export CODEX_BUNDLED_VERSION="${bundled_version:-unknown}"
+  export HOME="${STATE_DIR}/home"
+  export PATH="${VENDOR_DIR}/codex-path:${PATH:-/usr/bin:/bin}"
+
+  cd "${APP_DIR}" || return 1
+  log_msg "starting web service on ${PORT}; workspace=${workspace}"
+  "${node}" --disable-warning=ExperimentalWarning server/index.mjs >> "${LOG_FILE}" 2>&1 &
+  printf "%s" "$!" > "${PID_FILE}"
+  sleep 3
+
+  if is_running; then
+    log_msg "started pid $(cat "${PID_FILE}")"
+    return 0
+  fi
+  log_msg "process exited during startup; inspect ${LOG_FILE}"
+  rm -f "${PID_FILE}"
+  return 1
+}
+
+stop_process() {
+  if ! is_running; then
+    rm -f "${PID_FILE}"
+    return 0
+  fi
+  local pid count
+  pid="$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')"
+  kill -TERM "${pid}" 2>>"${LOG_FILE}" || true
+  count=0
+  while kill -0 "${pid}" 2>/dev/null && [ "${count}" -lt 12 ]; do
+    sleep 1
+    count=$((count + 1))
+  done
+  if kill -0 "${pid}" 2>/dev/null; then
+    kill -KILL "${pid}" 2>/dev/null || true
+  fi
+  rm -f "${PID_FILE}"
+  log_msg "stopped"
+}
+
+case "${1:-start}" in
+  start) start_process ;;
+  stop) stop_process ;;
+  restart) stop_process; start_process ;;
+  status) is_running ;;
+  *)
+    echo "Usage: $0 {start|stop|restart|status}"
+    exit 1
+    ;;
+esac

@@ -1,0 +1,6 @@
+#!/bin/bash
+set -u
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+"${DIR}/main" stop || true
+exit 0

@@ -1,0 +1,13 @@
+{
+  ".url": {
+    "com.lidachui.codexweb.Application": {
+      "title": "Codex 飞牛工作台",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "protocol": "http",
+      "port": "19090",
+      "url": "/",
+      "allUsers": true
+    }
+  }
+}

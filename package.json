@@ -1,0 +1,36 @@
+{
+  "name": "codex-fnos-web",
+  "version": "0.3.1",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n web,server -c cyan,magenta \"vite --host 0.0.0.0\" \"node --watch server/index.mjs\"",
+    "build": "tsc -b && vite build",
+    "start": "node server/index.mjs",
+    "test": "node --test server/test/access-control.test.mjs server/test/api-router-input.test.mjs server/test/appearance-service.test.mjs server/test/chat-adapter.test.mjs server/test/codex-updater.test.mjs server/test/database.test.mjs server/test/frame-policy.test.mjs server/test/provider-client.test.mjs server/test/stores.test.mjs server/test/workspace-roots.test.mjs server/test/workspace-service.test.mjs",
+    "test:e2e": "node scripts/e2e-smoke.mjs",
+    "package:fnos": "npm run build && node scripts/build-fpk.mjs",
+    "verify:fnos": "node scripts/verify-fpk.mjs"
+  },
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "node-fetch": "^3.3.2",
+    "proxy-agent": "^6.5.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7"
+  }
+}

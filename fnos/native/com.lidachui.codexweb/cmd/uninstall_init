@@ -1,0 +1,7 @@
+#!/bin/bash
+set -u
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+"${DIR}/main" stop || true
+# 共享目录中的项目、配置和登录信息会保留，卸载不主动删除用户数据。
+exit 0

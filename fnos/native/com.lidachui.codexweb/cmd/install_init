@@ -1,0 +1,7 @@
+#!/bin/bash
+set -u
+
+STATE_DIR="${TRIM_PKGVAR:-/tmp/com.lidachui.codexweb}"
+mkdir -p "${STATE_DIR}/logs" "${STATE_DIR}/home" 2>/dev/null || true
+echo "$(date '+%Y-%m-%d %H:%M:%S') - install initialized" >> "${STATE_DIR}/logs/install.log"
+exit 0

@@ -1,0 +1,12 @@
+{
+  "data-share": {
+    "shares": [
+      {
+        "name": "codexweb",
+        "permission": {
+          "rw": ["codexweb_user"]
+        }
+      }
+    ]
+  }
+}
