@@ -12,7 +12,7 @@ const serverEntry = process.env.E2E_SERVER_ENTRY || "server/index.mjs";
 const nodeBin = process.execPath;
 const codexBin = process.env.CODEX_BIN;
 if (!codexBin) throw new Error("CODEX_BIN is required for the app-server smoke test");
-const assistantText = "第三方 API 链路正常\n\n**Markdown 已生效**\n\n- 模型切换\n- 附件输入\n\n```js\nconsole.log('fnOS');\n```";
+const assistantText = "第三方 API 链路正常\n\n**Markdown 已生效**\n\n- 模型切换\n- 附件输入\n- [打开 src/index.js](src/index.js:1)\n\n```js\nconsole.log('fnOS');\n```";
 const testImagePng = await readFile(join(rootDir, "assets", "app-icon.png"));
 const testImageDataUrl = `data:image/png;base64,${testImagePng.toString("base64")}`;
 
@@ -176,6 +176,9 @@ const tempRoot = await mkdtemp(join(tmpdir(), "codex-fnos-e2e-"));
 const dataDir = join(tempRoot, "data");
 const workspaceRoot = join(tempRoot, "workspaces");
 await mkdir(workspaceRoot, { recursive: true });
+const e2eSkillPath = join(dataDir, "codex-home", "skills", "e2e-review", "SKILL.md");
+await mkdir(join(dataDir, "codex-home", "skills", "e2e-review"), { recursive: true });
+await writeFile(e2eSkillPath, "---\nname: e2e-review\ndescription: Review the current project in E2E tests.\n---\n\n# E2E Review\n\nReview the selected project.\n", "utf8");
 const modelRequests = [];
 const mockServer = createMockProvider(modelRequests);
 const mockPort = await listen(mockServer);
@@ -331,6 +334,17 @@ try {
   assert.equal(projectFiles.entries[0].name, "index.js");
   const projectFile = await request(appBaseUrl, cookie, `/api/projects/${projectResult.project.id}/file?path=src%2Findex.js`);
   assert.equal(projectFile.content, "export const hello = 'fnOS';\n");
+  const absoluteProjectFile = await request(appBaseUrl, cookie, `/api/projects/${projectResult.project.id}/file?path=${encodeURIComponent(`${join(projectResult.project.path, "src", "index.js")}:1`)}`);
+  assert.equal(absoluteProjectFile.path, "src/index.js");
+  const listedSkills = await request(appBaseUrl, cookie, `/api/projects/${projectResult.project.id}/skills?reload=1`);
+  const e2eSkill = listedSkills.skills.find((skill) => skill.name === "e2e-review");
+  assert.ok(e2eSkill?.enabled, JSON.stringify(listedSkills));
+  const skillDetail = await request(appBaseUrl, cookie, `/api/projects/${projectResult.project.id}/skills/detail?path=${encodeURIComponent(e2eSkill.path)}`);
+  assert.match(skillDetail.content, /E2E Review/);
+  const disabledSkills = await request(appBaseUrl, cookie, `/api/projects/${projectResult.project.id}/skills`, { method: "PATCH", body: JSON.stringify({ path: e2eSkill.path, enabled: false }) });
+  assert.equal(disabledSkills.skills.find((skill) => skill.path === e2eSkill.path)?.enabled, false);
+  const enabledSkills = await request(appBaseUrl, cookie, `/api/projects/${projectResult.project.id}/skills`, { method: "PATCH", body: JSON.stringify({ path: e2eSkill.path, enabled: true }) });
+  assert.equal(enabledSkills.skills.find((skill) => skill.path === e2eSkill.path)?.enabled, true);
   if (process.env.E2E_SERVE_UI === "1") {
     spawnSync("git", ["init"], { cwd: projectResult.project.path, windowsHide: true });
     spawnSync("git", ["add", "src/index.js"], { cwd: projectResult.project.path, windowsHide: true });
@@ -345,16 +359,17 @@ try {
   await waitForBridge(appBaseUrl, cookie);
   const threadResult = await request(appBaseUrl, cookie, "/api/threads", {
     method: "POST",
-    body: JSON.stringify({ projectId: projectResult.project.id }),
+    body: JSON.stringify({ projectId: projectResult.project.id, approvalPolicy: "never" }),
   });
+  assert.equal(threadResult.approvalPolicy, "never");
   const threadId = threadResult.thread.id;
   await request(appBaseUrl, cookie, `/api/threads/${threadId}/settings`, {
     method: "PATCH",
-    body: JSON.stringify({ model: "mock-coder-fast", effort: "high" }),
+    body: JSON.stringify({ model: "mock-coder-fast", effort: "high", approvalPolicy: "on-request" }),
   });
   const events = await collectUntilTurnCompleted(appBaseUrl, cookie, threadId, () => request(appBaseUrl, cookie, `/api/threads/${threadId}/turns`, {
     method: "POST",
-    body: JSON.stringify({ text: "say hello", effort: "high", attachments: [{ kind: "text", name: "note.md", content: "# attached" }, { kind: "image", name: "app-icon.png", dataUrl: testImageDataUrl }] }),
+    body: JSON.stringify({ text: "say hello", projectId: projectResult.project.id, effort: "high", approvalPolicy: "on-request", skills: [{ name: e2eSkill.name, path: e2eSkill.path }], attachments: [{ kind: "text", name: "note.md", content: "# attached" }, { kind: "image", name: "app-icon.png", dataUrl: testImageDataUrl }] }),
   }));
   assert(events.some((event) => event.method === "item/agentMessage/delta" && event.params?.delta?.includes("第三方 API")));
 
@@ -369,6 +384,7 @@ try {
   const resumedThread = await request(appBaseUrl, cookie, `/api/threads/${threadId}/resume`, { method: "POST", body: "{}" });
   assert.equal(resumedThread.model, "mock-coder-fast");
   assert.equal(resumedThread.reasoningEffort, "high");
+  assert.equal(resumedThread.approvalPolicy, "on-request");
   await delay(1200);
   const persistedThreads = await request(appBaseUrl, cookie, `/api/threads?cwd=${encodeURIComponent(projectResult.project.path)}`);
   const allPersistedThreads = await request(appBaseUrl, cookie, "/api/threads");
@@ -409,6 +425,7 @@ try {
   const restartedResume = await request(appBaseUrl, restartedCookie, `/api/threads/${threadId}/resume`, { method: "POST", body: "{}" });
   assert.equal(restartedResume.model, "mock-coder-fast", "selected model must survive an app restart");
   assert.equal(restartedResume.reasoningEffort, "high", "reasoning effort must survive an app restart");
+  assert.equal(restartedResume.approvalPolicy, "on-request", "per-thread approval policy must survive an app restart");
   let threadDelete = false;
   if (process.env.E2E_SERVE_UI !== "1") {
     await request(appBaseUrl, restartedCookie, `/api/threads/${threadId}`, { method: "DELETE" });
@@ -427,6 +444,9 @@ try {
     providerTest: true,
     switchedModel: modelRequests.at(-1),
     reasoningEffort: resumedThread.reasoningEffort,
+    approvalPolicy: resumedThread.approvalPolicy,
+    skills: true,
+    workspaceLinks: true,
     attachmentInput: true,
     imageHistory: true,
     backgroundImage: true,

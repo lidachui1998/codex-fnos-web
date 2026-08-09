@@ -230,6 +230,23 @@ export class Stores {
     `).run(key, String(value));
   }
 
+  getThreadApprovalPolicy(threadId) {
+    return this.db.prepare("SELECT approval_policy FROM thread_preferences WHERE thread_id = ?").get(threadId)?.approval_policy ?? null;
+  }
+
+  saveThreadApprovalPolicy(threadId, approvalPolicy) {
+    if (!["on-request", "never"].includes(approvalPolicy)) throw new Error("命令审批方式无效");
+    this.db.prepare(`
+      INSERT INTO thread_preferences (thread_id, approval_policy, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(thread_id) DO UPDATE SET approval_policy = excluded.approval_policy, updated_at = excluded.updated_at
+    `).run(String(threadId), approvalPolicy, now());
+    return approvalPolicy;
+  }
+
+  deleteThreadPreferences(threadId) {
+    return this.db.prepare("DELETE FROM thread_preferences WHERE thread_id = ?").run(threadId).changes > 0;
+  }
+
   getEffectiveProxy(provider) {
     if (provider.proxy_mode === "direct") return null;
     const id = provider.proxy_mode === "profile"

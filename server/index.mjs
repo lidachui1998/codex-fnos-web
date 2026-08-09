@@ -21,6 +21,7 @@ import { readJson, sendError, sendJson, serveStatic } from "./lib/http.mjs";
 import { createInternalToken, loadOrCreateMasterKey } from "./lib/security.mjs";
 import { handleProviderGateway } from "./provider-gateway.mjs";
 import { SseHub } from "./sse-hub.mjs";
+import { SkillService } from "./skill-service.mjs";
 import { Stores } from "./stores.mjs";
 import { WorkspaceService } from "./workspace-service.mjs";
 import { discoverWorkspaceCandidates } from "./workspace-roots.mjs";
@@ -65,6 +66,7 @@ const bridge = new AppServerBridge({
   gatewayToken,
   stores,
 });
+const skills = new SkillService(bridge);
 
 bridge.on("event", (event) => hub.broadcast(event));
 bridge.on("log", (event) => {
@@ -79,7 +81,7 @@ function queueBridgeRestart() {
   }, 400);
 }
 
-const handleApi = createApiHandler({ stores, bridge, queueBridgeRestart, appearance, updater, workspace });
+const handleApi = createApiHandler({ stores, bridge, queueBridgeRestart, appearance, updater, workspace, skills });
 const loginFailures = new Map();
 const loginWindowMs = 5 * 60 * 1000;
 const maxLoginFailures = 5;

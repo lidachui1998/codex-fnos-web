@@ -76,10 +76,35 @@ export type Thread = {
   modelProvider?: string;
   model?: string;
   reasoningEffort?: ReasoningEffort | null;
+  approvalPolicy?: ApprovalPolicy;
   turns?: Turn[];
 };
 
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+export type ApprovalPolicy = "on-request" | "never";
+
+export type Skill = {
+  name: string;
+  description: string;
+  shortDescription?: string | null;
+  path: string;
+  scope: "user" | "repo" | "system" | "admin";
+  enabled: boolean;
+  interface?: {
+    displayName?: string | null;
+    shortDescription?: string | null;
+    iconSmall?: string | null;
+    iconLarge?: string | null;
+    brandColor?: string | null;
+    defaultPrompt?: string | null;
+  } | null;
+};
+
+export type SkillsResult = {
+  cwd: string;
+  skills: Skill[];
+  errors: Array<{ path: string; message: string }>;
+};
 
 export type CodexUpdateState = {
   currentVersion: string;
@@ -104,7 +129,7 @@ export type Bootstrap = {
   settings: {
     defaultProxyId: string | null;
     workspaceRoots: string[];
-    approvalPolicy: "on-request" | "never";
+    approvalPolicy: ApprovalPolicy;
     theme: "system" | "light" | "dark" | "ink";
     backgroundEnabled: boolean;
     backgroundOpacity: number;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildTurnInput, readReasoningEffort } from "../api-router.mjs";
+import { buildTurnInput, readApprovalPolicy, readReasoningEffort } from "../api-router.mjs";
 
 test("turn input carries text files and images into app-server input", () => {
   assert.deepEqual(buildTurnInput({
@@ -20,4 +20,22 @@ test("reasoning effort only accepts app-server effort names", () => {
   assert.equal(readReasoningEffort("HIGH"), "high");
   assert.equal(readReasoningEffort(""), undefined);
   assert.throws(() => readReasoningEffort("very-hard"), /思考强度无效/);
+});
+
+test("turn input validates and explicitly invokes selected skills", () => {
+  const available = [{ name: "project-review", path: "/skills/project-review/SKILL.md", enabled: true }];
+  assert.deepEqual(buildTurnInput({
+    text: "检查当前项目",
+    skills: [{ name: "project-review", path: "/skills/project-review/SKILL.md" }],
+  }, available), [
+    { type: "text", text: "$project-review\n\n检查当前项目" },
+    { type: "skill", name: "project-review", path: "/skills/project-review/SKILL.md" },
+  ]);
+  assert.throws(() => buildTurnInput({ skills: [{ name: "missing", path: "/tmp/missing" }] }, available), /不可用/);
+});
+
+test("approval policy only accepts per-thread app-server values", () => {
+  assert.equal(readApprovalPolicy("never"), "never");
+  assert.equal(readApprovalPolicy(""), undefined);
+  assert.throws(() => readApprovalPolicy("global"), /审批方式无效/);
 });

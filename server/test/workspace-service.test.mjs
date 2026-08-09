@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { WorkspaceService, parseGitStatus } from "../workspace-service.mjs";
 
@@ -31,6 +32,8 @@ test("workspace files stay inside the project and text files can be read", () =>
       mimeType: "text/plain",
       content: "export const ready = true;\n",
     });
+    assert.equal(service.read({ path: projectPath }, `${join(projectPath, "src", "index.js")}:12:3`).path, "src/index.js");
+    assert.equal(service.read({ path: projectPath }, `${pathToFileURL(join(projectPath, "src", "index.js"))}#L12`).path, "src/index.js");
     const image = service.read({ path: projectPath }, "src/pixel.png");
     assert.deepEqual({ ...image, dataUrl: image.dataUrl.slice(0, 22) }, {
       path: "src/pixel.png",

@@ -56,6 +56,12 @@ export function openDatabase(path) {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS thread_preferences (
+      thread_id TEXT PRIMARY KEY,
+      approval_policy TEXT NOT NULL CHECK (approval_policy IN ('on-request', 'never')),
+      updated_at INTEGER NOT NULL
+    );
   `);
 
   const proxyColumns = new Set(db.prepare("PRAGMA table_info(proxy_profiles)").all().map((column) => column.name));

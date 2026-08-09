@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -29,10 +30,24 @@ function projectRoot(project) {
   return realpathSync(project.path);
 }
 
+function fileReference(value) {
+  let reference = String(value || "").trim();
+  if (/^file:/i.test(reference)) {
+    try {
+      reference = fileURLToPath(reference);
+    } catch {
+      throw Object.assign(new Error("文件链接格式无效"), { status: 400 });
+    }
+  }
+  reference = reference.replace(/#L?\d+(?:-L?\d+)?$/i, "");
+  reference = reference.replace(/:(\d+)(?::\d+)?$/, "");
+  return reference;
+}
+
 function resolveExistingProjectPath(project, value = "") {
-  if (isAbsolute(value)) throw Object.assign(new Error("文件路径必须相对于项目目录"), { status: 400 });
   const root = projectRoot(project);
-  const target = realpathSync(resolve(root, value || "."));
+  const reference = fileReference(value);
+  const target = realpathSync(isAbsolute(reference) ? reference : resolve(root, reference || "."));
   if (!isInside(root, target)) throw Object.assign(new Error("文件路径超出项目目录"), { status: 403 });
   return { root, target };
 }

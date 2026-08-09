@@ -84,6 +84,18 @@ test("appearance and approval settings are normalized", () => {
   });
 });
 
+test("approval policy is persisted independently for each thread", () => {
+  withStores(({ stores }) => {
+    stores.saveThreadApprovalPolicy("thread-a", "never");
+    stores.saveThreadApprovalPolicy("thread-b", "on-request");
+    assert.equal(stores.getThreadApprovalPolicy("thread-a"), "never");
+    assert.equal(stores.getThreadApprovalPolicy("thread-b"), "on-request");
+    assert.equal(stores.deleteThreadPreferences("thread-a"), true);
+    assert.equal(stores.getThreadApprovalPolicy("thread-a"), null);
+    assert.equal(stores.getThreadApprovalPolicy("thread-b"), "on-request");
+  });
+});
+
 test("one proxy profile stores all protocols and providers can force direct mode", () => {
   withStores(({ stores }) => {
     const proxy = stores.saveProxy({

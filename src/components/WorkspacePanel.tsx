@@ -14,7 +14,7 @@ function isMarkdown(path: string) {
   return /\.(?:md|markdown|mdown|mkd)$/i.test(path);
 }
 
-export function WorkspacePanel({ project, items, onClose }: { project: Project; items: ThreadItem[]; onClose: () => void }) {
+export function WorkspacePanel({ project, items, requestedFile, onClose }: { project: Project; items: ThreadItem[]; requestedFile?: { path: string; nonce: number } | null; onClose: () => void }) {
   const [tab, setTab] = useState<"changes" | "files">("changes");
   const [directory, setDirectory] = useState("");
   const [parent, setParent] = useState<string | null>(null);
@@ -77,6 +77,11 @@ export function WorkspacePanel({ project, items, onClose }: { project: Project; 
   }
 
   useEffect(() => { setDirectory(""); setPreview(null); void loadChanges(); }, [project.id]);
+  useEffect(() => {
+    if (!requestedFile) return;
+    setTab("files");
+    void openFile(requestedFile.path);
+  }, [requestedFile?.nonce]);
 
   return <aside className="workspace-inspector">
     <header><div><Code2 size={17} /><span><strong>项目文件</strong><small>{project.name}</small></span></div><button className="icon-button small" onClick={onClose} aria-label="关闭项目文件"><X size={17} /></button></header>

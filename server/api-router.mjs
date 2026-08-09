@@ -23,10 +23,21 @@ function filterThreadsByCwd(result, cwd) {
 const reasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 const imageDataUrl = /^data:image\/(png|jpeg|webp|gif);base64,([a-z\d+/=]+)$/i;
 
-function buildTurnInput(input) {
+function buildTurnInput(input, availableSkills = []) {
   const result = [];
   const text = String(input.text || "");
-  if (text.trim()) result.push({ type: "text", text });
+  const requestedSkills = Array.isArray(input.skills) ? input.skills : [];
+  if (requestedSkills.length > 6) throw Object.assign(new Error("每次最多选择 6 个 Skills"), { status: 400 });
+  const selectedSkills = requestedSkills.map((requested) => {
+    const path = String(requested?.path || "");
+    const skill = availableSkills.find((item) => String(item.path) === path && item.enabled !== false);
+    if (!skill) throw Object.assign(new Error(`Skill ${String(requested?.name || path || "未知")} 不可用`), { status: 400 });
+    return skill;
+  });
+  const markers = selectedSkills.map((skill) => `$${skill.name}`).join(" ");
+  const prompt = [markers, text.trim()].filter(Boolean).join("\n\n");
+  if (prompt) result.push({ type: "text", text: prompt });
+  for (const skill of selectedSkills) result.push({ type: "skill", name: skill.name, path: skill.path });
   const attachments = Array.isArray(input.attachments) ? input.attachments : [];
   if (attachments.length > 6) throw Object.assign(new Error("每次最多添加 6 个附件"), { status: 400 });
   for (const attachment of attachments) {
@@ -57,17 +68,25 @@ function readReasoningEffort(value) {
   return effort;
 }
 
+function readApprovalPolicy(value) {
+  const policy = String(value || "").trim();
+  if (!policy) return undefined;
+  if (!["on-request", "never"].includes(policy)) throw Object.assign(new Error("审批方式无效"), { status: 400 });
+  return policy;
+}
+
 function publicCodexStatus(value) {
   const { binaryPath: _binaryPath, packageVersion: _packageVersion, ...result } = value;
   return result;
 }
 
-export function createApiHandler({ stores, bridge, queueBridgeRestart, appearance, updater, workspace }) {
+export function createApiHandler({ stores, bridge, queueBridgeRestart, appearance, updater, workspace, skills }) {
   const findProject = (id) => stores.listProjects().find((item) => item.id === id);
   const findProvider = (id) => stores.listProviders().find((item) => item.id === id);
 
   return async function handleApi(req, res, url) {
     const { pathname, searchParams } = url;
+    let params;
     if (req.method === "GET" && pathname === "/api/bootstrap") {
       let account = null;
       if (bridge.snapshot().status === "ready") {
@@ -78,7 +97,7 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
         }
       }
       sendJson(res, 200, {
-        version: "0.3.1",
+        version: "0.4.0",
         providers: stores.listProviders(),
         proxies: stores.listProxies(),
         projects: stores.listProjects(),
@@ -88,6 +107,28 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
         codex: publicCodexStatus(updater.status()),
         appearance: appearance.status(),
       });
+      return;
+    }
+
+    params = route(req.method, pathname, { method: "GET", path: /^\/api\/projects\/(?<id>[^/]+)\/skills$/ });
+    if (params) {
+      const project = findProject(params.id);
+      if (!project) return sendError(res, 404, "项目不存在");
+      sendJson(res, 200, await skills.list(project, searchParams.get("reload") === "1"));
+      return;
+    }
+    params = route(req.method, pathname, { method: "PATCH", path: /^\/api\/projects\/(?<id>[^/]+)\/skills$/ });
+    if (params) {
+      const project = findProject(params.id);
+      if (!project) return sendError(res, 404, "项目不存在");
+      sendJson(res, 200, await skills.setEnabled(project, await readJson(req)));
+      return;
+    }
+    params = route(req.method, pathname, { method: "GET", path: /^\/api\/projects\/(?<id>[^/]+)\/skills\/detail$/ });
+    if (params) {
+      const project = findProject(params.id);
+      if (!project) return sendError(res, 404, "项目不存在");
+      sendJson(res, 200, await skills.read(project, searchParams.get("path") || ""));
       return;
     }
 
@@ -161,7 +202,7 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
       sendJson(res, 201, { provider });
       return;
     }
-    let params = route(req.method, pathname, { method: "PATCH", path: /^\/api\/providers\/(?<id>[^/]+)$/ });
+    params = route(req.method, pathname, { method: "PATCH", path: /^\/api\/providers\/(?<id>[^/]+)$/ });
     if (params) {
       const provider = stores.saveProvider(await readJson(req), params.id);
       queueBridgeRestart();
@@ -335,7 +376,11 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
       });
       // Filter after listing. On Windows, Codex persists canonical cwd values
       // with a \\?\ prefix, which does not match thread/list's SQL cwd filter.
-      sendJson(res, 200, filterThreadsByCwd(result, cwd));
+      const filtered = filterThreadsByCwd(result, cwd);
+      sendJson(res, 200, {
+        ...filtered,
+        data: filtered.data?.map((thread) => ({ ...thread, approvalPolicy: stores.getThreadApprovalPolicy(thread.id) ?? undefined })) ?? [],
+      });
       return;
     }
     if (req.method === "POST" && pathname === "/api/threads") {
@@ -344,16 +389,18 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
       if (!project) return sendError(res, 404, "项目不存在");
       const providerId = input.providerId || project.defaultProviderId || null;
       const provider = providerId ? findProvider(providerId) : null;
+      const approvalPolicy = readApprovalPolicy(input.approvalPolicy) ?? stores.getSettings().approvalPolicy;
       const result = await bridge.request("thread/start", {
         cwd: project.path,
         modelProvider: modelProviderKey(providerId),
         model: input.model || provider?.model || undefined,
         config: input.effort ? { model_reasoning_effort: readReasoningEffort(input.effort) } : undefined,
-        approvalPolicy: stores.getSettings().approvalPolicy,
+        approvalPolicy,
         sandbox: "workspace-write",
         personality: "friendly",
         serviceName: "codex_fnos_web",
       });
+      stores.saveThreadApprovalPolicy(result.thread.id, result.approvalPolicy ?? approvalPolicy);
       sendJson(res, 201, result);
       return;
     }
@@ -365,27 +412,39 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
     params = route(req.method, pathname, { method: "DELETE", path: /^\/api\/threads\/(?<id>[^/]+)$/ });
     if (params) {
       await bridge.request("thread/archive", { threadId: params.id });
+      stores.deleteThreadPreferences(params.id);
       sendJson(res, 200, { deleted: true });
       return;
     }
     params = route(req.method, pathname, { method: "POST", path: /^\/api\/threads\/(?<id>[^/]+)\/resume$/ });
     if (params) {
-      sendJson(res, 200, await bridge.request("thread/resume", { threadId: params.id }));
+      const result = await bridge.request("thread/resume", { threadId: params.id });
+      const approvalPolicy = stores.getThreadApprovalPolicy(params.id);
+      if (approvalPolicy && approvalPolicy !== result.approvalPolicy) {
+        await bridge.request("thread/settings/update", { threadId: params.id, approvalPolicy });
+      }
+      sendJson(res, 200, { ...result, approvalPolicy: approvalPolicy ?? result.approvalPolicy });
       return;
     }
     params = route(req.method, pathname, { method: "PATCH", path: /^\/api\/threads\/(?<id>[^/]+)\/settings$/ });
     if (params) {
       const input = await readJson(req);
+      const approvalPolicy = readApprovalPolicy(input.approvalPolicy);
       sendJson(res, 200, await bridge.request("thread/settings/update", {
         threadId: params.id,
         model: input.model || undefined,
         effort: readReasoningEffort(input.effort),
+        approvalPolicy,
       }));
+      if (approvalPolicy) stores.saveThreadApprovalPolicy(params.id, approvalPolicy);
       return;
     }
     params = route(req.method, pathname, { method: "POST", path: /^\/api\/threads\/(?<id>[^/]+)\/fork$/ });
     if (params) {
-      sendJson(res, 201, await bridge.request("thread/fork", { threadId: params.id }));
+      const result = await bridge.request("thread/fork", { threadId: params.id });
+      const approvalPolicy = stores.getThreadApprovalPolicy(params.id);
+      if (approvalPolicy && result.thread?.id) stores.saveThreadApprovalPolicy(result.thread.id, approvalPolicy);
+      sendJson(res, 201, result);
       return;
     }
     params = route(req.method, pathname, { method: "POST", path: /^\/api\/threads\/(?<id>[^/]+)\/archive$/ });
@@ -396,14 +455,22 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
     params = route(req.method, pathname, { method: "POST", path: /^\/api\/threads\/(?<id>[^/]+)\/turns$/ });
     if (params) {
       const input = await readJson(req, 12 * 1024 * 1024);
+      const approvalPolicy = readApprovalPolicy(input.approvalPolicy);
+      let availableSkills = [];
+      if (Array.isArray(input.skills) && input.skills.length > 0) {
+        const project = findProject(input.projectId);
+        if (!project) return sendError(res, 404, "当前会话所属项目不存在");
+        availableSkills = (await skills.list(project, false)).skills;
+      }
       sendJson(res, 202, await bridge.request("turn/start", {
         threadId: params.id,
         clientUserMessageId: input.clientId || randomUUID(),
-        input: buildTurnInput(input),
-        approvalPolicy: stores.getSettings().approvalPolicy,
+        input: buildTurnInput(input, availableSkills),
+        approvalPolicy,
         model: input.model || undefined,
         effort: readReasoningEffort(input.effort),
       }));
+      if (approvalPolicy) stores.saveThreadApprovalPolicy(params.id, approvalPolicy);
       return;
     }
     params = route(req.method, pathname, { method: "POST", path: /^\/api\/threads\/(?<id>[^/]+)\/interrupt$/ });
@@ -455,4 +522,4 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
   };
 }
 
-export { buildTurnInput, readReasoningEffort };
+export { buildTurnInput, readApprovalPolicy, readReasoningEffort };

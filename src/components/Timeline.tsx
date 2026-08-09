@@ -5,10 +5,24 @@ import remarkGfm from "remark-gfm";
 import type { ThreadItem } from "../types";
 import { changeKindName, DiffView } from "./DiffView";
 
+function workspaceFileHref(href: string | undefined, projectPath: string) {
+  if (!href) return null;
+  const value = href.trim();
+  if (!value || /^(?:https?:|mailto:|tel:|data:|#)/i.test(value)) return null;
+  if (/^file:/i.test(value) || /^[a-z]:[\\/]/i.test(value)) return value;
+  const normalizedProject = projectPath.replaceAll("\\", "/").replace(/\/$/, "");
+  const normalizedValue = value.replaceAll("\\", "/");
+  if (normalizedValue.startsWith("/") && !normalizedValue.startsWith(`${normalizedProject}/`) && normalizedValue !== normalizedProject) return null;
+  return value;
+}
+
 function userText(item: ThreadItem) {
-  return (item.content?.filter((part) => part.type === "text").map((part) => part.text ?? "").join("\n") ?? "")
+  const value = (item.content?.filter((part) => part.type === "text").map((part) => part.text ?? "").join("\n") ?? "")
     .replace(/\s*<fnos_attachment name=("([^"]*)"|'([^']*)')>[\s\S]*?<\/fnos_attachment>/g, (_match, _quoted, doubleName, singleName) => `\n📎 ${doubleName || singleName || "附件"}`)
     .trim();
+  const skillNames = [...value.matchAll(/(?:^|\s)\$([\w:-]+)/g)].map((match) => match[1]);
+  const text = value.replace(/^(?:\$[\w:-]+\s*)+/, "").trim();
+  return text || (skillNames.length > 0 ? `✨ 使用 Skills：${skillNames.join("、")}` : "");
 }
 
 function userImages(item: ThreadItem) {
@@ -39,7 +53,7 @@ function ToolItem({ item }: { item: ThreadItem }) {
   );
 }
 
-export function Timeline({ items, streamingItemId, turnRunning, onSuggestion }: { items: ThreadItem[]; streamingItemId?: string | null; turnRunning?: boolean; onSuggestion?: (text: string) => void }) {
+export function Timeline({ items, streamingItemId, turnRunning, projectPath, onOpenFile, onSuggestion }: { items: ThreadItem[]; streamingItemId?: string | null; turnRunning?: boolean; projectPath: string; onOpenFile: (path: string) => void; onSuggestion?: (text: string) => void }) {
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   if (items.length === 0) {
     return (
@@ -65,7 +79,12 @@ export function Timeline({ items, streamingItemId, turnRunning, onSuggestion }: 
           return <article className="message user-message" key={item.id}><div className="message-avatar"><UserRound size={16} /></div><div className="message-body"><div className="message-label">你</div>{images.length > 0 && <div className={`message-images ${images.length > 1 ? "multiple" : ""}`}>{images.map((url, index) => <button key={`${item.id}-${index}`} onClick={() => setPreviewImage(url)} title="点击放大图片"><img src={url} alt={`发送的图片 ${index + 1}`} loading="lazy" /><span><Maximize2 size={14} /></span></button>)}</div>}{text && <div className="message-text">{text}</div>}</div></article>;
         }
         if (item.type === "agentMessage" || item.type === "plan") {
-          return <article className="message agent-message" key={item.id}><div className="message-avatar agent"><Bot size={16} /></div><div className="message-body"><div className="message-label">Codex</div><div className="message-text markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ children, ...props }) => <a {...props} target="_blank" rel="noreferrer">{children}</a> }}>{item.text ?? ""}</ReactMarkdown>{streamingItemId === item.id && <span className="stream-caret" />}</div></div></article>;
+          return <article className="message agent-message" key={item.id}><div className="message-avatar agent"><Bot size={16} /></div><div className="message-body"><div className="message-label">Codex</div><div className="message-text markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ children, href, node: _node, ...props }) => {
+            const file = workspaceFileHref(href, projectPath);
+            return file
+              ? <a {...props} href={href} className="workspace-file-link" onClick={(event) => { event.preventDefault(); onOpenFile(file); }} title="在项目文件中打开">{children}</a>
+              : <a {...props} href={href} target="_blank" rel="noreferrer">{children}</a>;
+          } }}>{item.text ?? ""}</ReactMarkdown>{streamingItemId === item.id && <span className="stream-caret" />}</div></div></article>;
         }
         if (["commandExecution", "fileChange", "mcpToolCall", "collabToolCall", "webSearch"].includes(item.type)) {
           return <ToolItem item={item} key={item.id} />;
@@ -80,3 +99,5 @@ export function Timeline({ items, streamingItemId, turnRunning, onSuggestion }: 
     </div>
   );
 }
+
+export { workspaceFileHref };

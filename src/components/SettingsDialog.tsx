@@ -313,15 +313,15 @@ export function SettingsDialog({ open, bootstrap, onClose, onChanged }: Props) {
 
           {tab === "permissions" && (
             <div className="settings-section compact-settings">
-              <div className="section-heading"><h3>命令审批</h3><p>控制 Codex 执行命令或修改文件时是否需要你逐次确认。</p></div>
+              <div className="section-heading"><h3>新会话默认审批</h3><p>这里只决定新建会话的默认值；已有会话请在聊天顶部单独切换。</p></div>
               <div className="setting-card">
-                <div><ShieldCheck size={20} /><span><strong>审批方式</strong><small>仍然保留 workspace-write 沙箱，只自动放行工作区内的正常操作。</small></span></div>
-                <select value={bootstrap.settings.approvalPolicy} onChange={(event) => void perform("approval-policy", () => api("/api/settings", { method: "PATCH", body: JSON.stringify({ approvalPolicy: event.target.value }) }), event.target.value === "never" ? "已开启自动审批" : "已恢复逐次确认")}>
+                <div><ShieldCheck size={20} /><span><strong>新会话默认值</strong><small>每个聊天会独立保存自己的选择，仍然保留 workspace-write 沙箱。</small></span></div>
+                <select value={bootstrap.settings.approvalPolicy} onChange={(event) => void perform("approval-policy", () => api("/api/settings", { method: "PATCH", body: JSON.stringify({ approvalPolicy: event.target.value }) }), event.target.value === "never" ? "新会话将默认自动审批" : "新会话将默认逐次确认")}>
                   <option value="on-request">需要时询问我</option>
                   <option value="never">自动审批（推荐给私人 NAS）</option>
                 </select>
               </div>
-              <div className="settings-warning">自动审批会减少弹窗，但 Codex 仍可能修改项目文件。建议只对你信任的私人项目开启，并通过“项目文件和改动”面板检查结果。</div>
+              <div className="settings-warning">自动审批会减少弹窗，但 Codex 仍可能修改项目文件。会话顶部的设置优先于这里的默认值，切换后只影响当前聊天。</div>
             </div>
           )}
 
