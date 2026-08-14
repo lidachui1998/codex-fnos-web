@@ -21,6 +21,7 @@ required_outer = {
 }
 required_app = {
     "server/server/index.mjs",
+    "server/server/schedule-mcp.mjs",
     "server/dist/index.html",
     "server/package.json",
     "vendor/CODEX_VERSION",
@@ -62,6 +63,7 @@ with tarfile.open(fileobj=io.BytesIO(package_bytes), mode="r:gz") as package:
         "identity": r"(?m)^appname=com\.lidachui\.codexweb$",
         "node24": r"(?m)^install_dep_apps=nodejs_v24$",
         "port": r"(?m)^service_port=19090$",
+        "micro-app": r"(?m)^micro_app=true$",
     }
     for label, pattern in checks.items():
         if not re.search(pattern, manifest):
@@ -111,13 +113,35 @@ with tarfile.open(fileobj=io.BytesIO(package_bytes), mode="r:gz") as package:
 
         server_source = app.extractfile("server/server/index.mjs")
         server_bytes = server_source.read() if server_source else b""
-        if (
-            b"Codex fnOS Web listening" not in server_bytes
-            or b"ProxyAgent" not in server_bytes
-            or b"access-password.json" not in server_bytes
-            or b"HttpOnly" not in server_bytes
-        ):
-            raise SystemExit("Bundled server does not contain the expected app and proxy runtime")
+        server_markers = {
+            "app": b"Codex fnOS Web listening",
+            "proxy": b"ProxyAgent",
+            "access password": b"access-password.json",
+            "secure cookie": b"HttpOnly",
+            "Hermes signature": b"X-Webhook-Signature",
+            "notification delivery": b"notification_deliveries",
+            "plugin remote id resolver": b"resolvedPluginId",
+            "plugin official remote id": b"remotePluginId",
+            "account rate limits": b"account/rateLimits/read",
+            "multiple account homes": b"codex-accounts",
+            "recoverable account deletion": b"deleted-accounts",
+            "scheduled task auto approval": b'approval_mode = "approve"',
+            "desktop automation import": b"automation.toml",
+        }
+        missing_server_markers = [label for label, marker in server_markers.items() if marker not in server_bytes]
+        if missing_server_markers:
+            raise SystemExit(f"Bundled server is missing runtime markers: {missing_server_markers}")
+
+        schedule_mcp_source = app.extractfile("server/server/schedule-mcp.mjs")
+        schedule_mcp_bytes = schedule_mcp_source.read() if schedule_mcp_source else b""
+        expected_mcp_tools = (b"create_scheduled_task", b"list_scheduled_tasks", b"create_global_skill", b"create_global_plugin")
+        if any(tool not in schedule_mcp_bytes for tool in expected_mcp_tools):
+            raise SystemExit("Bundled schedule MCP does not contain the expected tools")
+
+        cmd_main_source = package.extractfile("cmd/main")
+        cmd_main_bytes = cmd_main_source.read() if cmd_main_source else b""
+        if b'CODEX_FNOS_NODE_BIN="${node}"' not in cmd_main_bytes or b'PATH="${node_dir}:' not in cmd_main_bytes:
+            raise SystemExit("fnOS startup script does not expose the Node 24 runtime to Codex commands")
 
         ui_source = app.extractfile("ui/config")
         ui_config = json.loads(ui_source.read().decode("utf-8") if ui_source else "")

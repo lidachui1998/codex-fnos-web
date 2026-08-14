@@ -5,7 +5,7 @@ import { dirname } from "node:path";
 export function openDatabase(path) {
   mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
-  db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+  db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA temp_store = MEMORY; PRAGMA mmap_size = 67108864;");
   db.exec(`
     CREATE TABLE IF NOT EXISTS proxy_profiles (
       id TEXT PRIMARY KEY,
@@ -58,15 +58,125 @@ export function openDatabase(path) {
       value TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS codex_accounts (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      home_key TEXT NOT NULL UNIQUE,
+      account_type TEXT,
+      email TEXT,
+      plan_type TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      last_used_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS thread_preferences (
       thread_id TEXT PRIMARY KEY,
       approval_policy TEXT NOT NULL CHECK (approval_policy IN ('on-request', 'never')),
       display_name TEXT,
       pinned INTEGER NOT NULL DEFAULT 0,
       deleted INTEGER NOT NULL DEFAULT 0,
+      archived_local INTEGER NOT NULL DEFAULT 0,
+      network_access INTEGER NOT NULL DEFAULT 1,
+      project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
       updated_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS scheduled_tasks (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      prompt TEXT NOT NULL,
+      schedule_json TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      network_access INTEGER NOT NULL DEFAULT 0,
+      sandbox_mode TEXT NOT NULL DEFAULT 'workspace' CHECK (sandbox_mode IN ('workspace', 'unrestricted')),
+      model TEXT,
+      reasoning_effort TEXT,
+      source_automation_id TEXT,
+      source_cwd TEXT,
+      source_prompt TEXT,
+      memory_text TEXT,
+      compatibility_json TEXT NOT NULL DEFAULT '[]',
+      next_run_at INTEGER,
+      last_run_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS scheduled_runs (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES scheduled_tasks(id) ON DELETE CASCADE,
+      thread_id TEXT,
+      turn_id TEXT,
+      status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
+      output TEXT,
+      error TEXT,
+      started_at INTEGER NOT NULL,
+      completed_at INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS notifications (
+      id TEXT PRIMARY KEY,
+      event_key TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed', 'timeout', 'waiting')),
+      source TEXT NOT NULL CHECK (source IN ('chat', 'scheduled')),
+      title TEXT NOT NULL,
+      message TEXT NOT NULL DEFAULT '',
+      thread_id TEXT,
+      turn_id TEXT,
+      project_id TEXT,
+      schedule_id TEXT REFERENCES scheduled_tasks(id) ON DELETE SET NULL,
+      schedule_run_id TEXT REFERENCES scheduled_runs(id) ON DELETE SET NULL,
+      is_read INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS notification_channels (
+      channel TEXT PRIMARY KEY CHECK (channel IN ('fnos', 'feishu', 'hermes')),
+      enabled INTEGER NOT NULL DEFAULT 0,
+      webhook_url_encrypted TEXT,
+      webhook_url_hint TEXT,
+      secret_encrypted TEXT,
+      secret_hint TEXT,
+      events_json TEXT NOT NULL DEFAULT '["completed","failed","timeout","waiting"]',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS notification_deliveries (
+      id TEXT PRIMARY KEY,
+      notification_id TEXT NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
+      channel TEXT NOT NULL CHECK (channel IN ('feishu', 'hermes')),
+      event_type TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'succeeded', 'failed')),
+      error TEXT,
+      attempted_at INTEGER NOT NULL,
+      UNIQUE(notification_id, channel, event_type)
+    );
+
+    CREATE INDEX IF NOT EXISTS scheduled_tasks_due_idx ON scheduled_tasks(enabled, next_run_at);
+    CREATE INDEX IF NOT EXISTS scheduled_runs_task_idx ON scheduled_runs(task_id, started_at DESC);
+    CREATE INDEX IF NOT EXISTS notifications_updated_idx ON notifications(updated_at DESC);
+    CREATE INDEX IF NOT EXISTS notifications_status_idx ON notifications(status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS notifications_unread_idx ON notifications(is_read, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS codex_accounts_used_idx ON codex_accounts(last_used_at DESC);
   `);
+
+  const timestamp = Math.floor(Date.now() / 1000);
+  db.prepare(`
+    INSERT INTO notification_channels (channel, enabled, created_at, updated_at)
+    VALUES ('fnos', 1, ?, ?)
+    ON CONFLICT(channel) DO NOTHING
+  `).run(timestamp, timestamp);
+  for (const channel of ["feishu", "hermes"]) {
+    db.prepare(`
+      INSERT INTO notification_channels (channel, enabled, created_at, updated_at)
+      VALUES (?, 0, ?, ?)
+      ON CONFLICT(channel) DO NOTHING
+    `).run(channel, timestamp, timestamp);
+  }
 
   const proxyColumns = new Set(db.prepare("PRAGMA table_info(proxy_profiles)").all().map((column) => column.name));
   for (const column of [
@@ -86,6 +196,22 @@ export function openDatabase(path) {
   if (!threadColumns.has("display_name")) db.exec("ALTER TABLE thread_preferences ADD COLUMN display_name TEXT");
   if (!threadColumns.has("pinned")) db.exec("ALTER TABLE thread_preferences ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
   if (!threadColumns.has("deleted")) db.exec("ALTER TABLE thread_preferences ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0");
+  if (!threadColumns.has("archived_local")) db.exec("ALTER TABLE thread_preferences ADD COLUMN archived_local INTEGER NOT NULL DEFAULT 0");
+  if (!threadColumns.has("network_access")) db.exec("ALTER TABLE thread_preferences ADD COLUMN network_access INTEGER NOT NULL DEFAULT 1");
+  if (!threadColumns.has("project_id")) db.exec("ALTER TABLE thread_preferences ADD COLUMN project_id TEXT");
+  const scheduledTaskColumns = new Set(db.prepare("PRAGMA table_info(scheduled_tasks)").all().map((column) => column.name));
+  for (const [column, definition] of [
+    ["sandbox_mode", "TEXT NOT NULL DEFAULT 'workspace'"],
+    ["model", "TEXT"],
+    ["reasoning_effort", "TEXT"],
+    ["source_automation_id", "TEXT"],
+    ["source_cwd", "TEXT"],
+    ["source_prompt", "TEXT"],
+    ["memory_text", "TEXT"],
+    ["compatibility_json", "TEXT NOT NULL DEFAULT '[]'"],
+  ]) {
+    if (!scheduledTaskColumns.has(column)) db.exec(`ALTER TABLE scheduled_tasks ADD COLUMN ${column} ${definition}`);
+  }
   db.exec(`
     UPDATE proxy_profiles SET http_url_encrypted = url_encrypted, http_url_hint = url_hint
       WHERE kind = 'http' AND http_url_encrypted IS NULL;
@@ -96,5 +222,21 @@ export function openDatabase(path) {
     UPDATE provider_profiles SET proxy_mode = 'profile'
       WHERE proxy_profile_id IS NOT NULL AND proxy_mode = 'inherit';
   `);
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'network_access_default_v1'").get()) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.prepare(`
+        INSERT INTO settings (key, value) VALUES ('network_access_default', 'true')
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `).run();
+      db.prepare("UPDATE thread_preferences SET network_access = 1, updated_at = ?").run(timestamp);
+      db.prepare("INSERT INTO settings (key, value) VALUES ('network_access_default_v1', 'true')").run();
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  db.exec("PRAGMA optimize");
   return db;
 }

@@ -52,6 +52,7 @@ export type ThreadItem = {
   status?: string;
   aggregatedOutput?: string;
   exitCode?: number | null;
+  durationMs?: number | null;
   changes?: Array<{ path: string; kind: string; diff?: string }>;
   summary?: string[];
   tool?: string;
@@ -59,6 +60,11 @@ export type ThreadItem = {
   arguments?: unknown;
   result?: unknown;
   error?: unknown;
+  errorCode?: string;
+  retrying?: boolean;
+  turnStartedAt?: number | null;
+  turnCompletedAt?: number | null;
+  turnDurationMs?: number | null;
 };
 
 export type Turn = {
@@ -66,6 +72,9 @@ export type Turn = {
   status: string;
   items: ThreadItem[];
   error?: { message: string } | null;
+  startedAt?: number | null;
+  completedAt?: number | null;
+  durationMs?: number | null;
 };
 
 export type Thread = {
@@ -73,6 +82,7 @@ export type Thread = {
   name?: string;
   pinned?: boolean;
   archived?: boolean;
+  storageArchived?: boolean;
   projectId?: string;
   projectName?: string;
   preview: string;
@@ -81,9 +91,11 @@ export type Thread = {
   updatedAt: number;
   status?: { type?: string } | string;
   modelProvider?: string;
+  runtimeModelProvider?: string;
   model?: string;
   reasoningEffort?: ReasoningEffort | null;
   approvalPolicy?: ApprovalPolicy;
+  networkAccess?: boolean;
   turns?: Turn[];
 };
 
@@ -114,6 +126,132 @@ export type SkillsResult = {
   errors: Array<{ path: string; message: string }>;
 };
 
+export type PluginSummary = {
+  id: string;
+  remotePluginId?: string | null;
+  name: string;
+  version?: string | null;
+  localVersion?: string | null;
+  installed: boolean;
+  enabled?: boolean;
+  installPolicy?: "NOT_AVAILABLE" | "AVAILABLE" | "INSTALLED_BY_DEFAULT";
+  availability?: "AVAILABLE" | "DISABLED_BY_ADMIN" | string;
+  disabledReason?: string | null;
+  marketplaceName?: string | null;
+  marketplacePath?: string | null;
+  keywords?: string[];
+  interface?: {
+    displayName?: string | null;
+    shortDescription?: string | null;
+    longDescription?: string | null;
+    developerName?: string | null;
+    category?: string | null;
+  } | null;
+};
+
+export type PluginsResult = {
+  data: PluginSummary[];
+  errors: Array<{ marketplacePath?: string; message?: string } | string>;
+  featuredPluginIds: string[];
+};
+
+export type Schedule =
+  | { type: "interval"; minutes: number }
+  | { type: "daily"; time: string }
+  | { type: "weekly"; time: string; days: number[] };
+
+export type ScheduledRun = {
+  id: string;
+  threadId?: string | null;
+  turnId?: string | null;
+  status: "running" | "succeeded" | "failed";
+  output?: string | null;
+  error?: string | null;
+  startedAt: number;
+  completedAt?: number | null;
+};
+
+export type ScheduledTask = {
+  id: string;
+  name: string;
+  projectId: string;
+  projectName: string;
+  prompt: string;
+  schedule: Schedule;
+  enabled: boolean;
+  networkAccess: boolean;
+  sandboxMode: "workspace" | "unrestricted";
+  model?: string | null;
+  reasoningEffort?: ReasoningEffort | null;
+  sourceAutomationId?: string | null;
+  sourceCwd?: string | null;
+  sourcePrompt?: string | null;
+  memoryBytes: number;
+  compatibility: AutomationCompatibilityIssue[];
+  nextRunAt?: number | null;
+  lastRunAt?: number | null;
+  createdAt: number;
+  updatedAt: number;
+  runs: ScheduledRun[];
+};
+
+export type AutomationCompatibilityIssue = {
+  severity: "warning" | "blocker";
+  code: string;
+  message: string;
+  resolved?: boolean;
+};
+
+export type AutomationImportPreview = {
+  sourceAutomationId?: string | null;
+  name: string;
+  schedule: Schedule;
+  model?: string | null;
+  reasoningEffort?: ReasoningEffort | null;
+  sourceCwd?: string | null;
+  targetCwd: string;
+  memoryBytes: number;
+  enabledAfterImport: boolean;
+  issues: AutomationCompatibilityIssue[];
+};
+
+export type NotificationStatus = "running" | "completed" | "failed" | "timeout" | "waiting";
+export type NotificationFilter = "all" | "unread" | "running" | "failed" | "scheduled";
+
+export type NotificationItem = {
+  id: string;
+  status: NotificationStatus;
+  source: "chat" | "scheduled";
+  title: string;
+  message: string;
+  threadId?: string | null;
+  turnId?: string | null;
+  projectId?: string | null;
+  scheduleId?: string | null;
+  scheduleRunId?: string | null;
+  read: boolean;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type NotificationSummary = {
+  unread: number;
+  running: number;
+  failed: number;
+  scheduled: number;
+};
+
+export type NotificationChannel = {
+  channel: "fnos" | "feishu" | "hermes";
+  enabled: boolean;
+  webhookUrlHint?: string | null;
+  hasWebhookUrl: boolean;
+  secretHint?: string | null;
+  hasSecret: boolean;
+  events: Array<"completed" | "failed" | "timeout" | "waiting">;
+  updatedAt: number;
+};
+
 export type CodexUpdateState = {
   currentVersion: string;
   bundledVersion: string;
@@ -127,6 +265,48 @@ export type CodexUpdateState = {
 export type Account = {
   account?: { type: string; email?: string | null; planType?: string | null } | null;
   requiresOpenaiAuth?: boolean;
+  activeProfile?: CodexAccountProfile;
+  rateLimits?: AccountRateLimits | null;
+  rateLimitsError?: string | null;
+};
+
+export type CodexAccountProfile = {
+  id: string;
+  label: string;
+  homeKey: string;
+  accountType?: string | null;
+  email?: string | null;
+  planType?: string | null;
+  authenticated: boolean;
+  active: boolean;
+  createdAt: number;
+  updatedAt: number;
+  lastUsedAt: number;
+};
+
+export type RateLimitWindow = {
+  usedPercent?: number | null;
+  windowDurationMins?: number | null;
+  resetsAt?: number | null;
+};
+
+export type RateLimitSnapshot = {
+  limitId?: string | null;
+  limitName?: string | null;
+  primary?: RateLimitWindow | null;
+  secondary?: RateLimitWindow | null;
+  credits?: { hasCredits: boolean; unlimited: boolean; balance?: string | null } | null;
+  individualLimit?: { limit: string; used: string; remainingPercent: number; resetsAt: number } | null;
+  spendControlReached?: boolean | null;
+  planType?: string | null;
+  rateLimitReachedType?: string | null;
+};
+
+export type AccountRateLimits = {
+  rateLimits: RateLimitSnapshot;
+  rateLimitsByLimitId?: Record<string, RateLimitSnapshot> | null;
+  codexRateLimits?: RateLimitSnapshot | null;
+  rateLimitResetCredits?: { availableCount?: number } | null;
 };
 
 export type Bootstrap = {
@@ -138,14 +318,25 @@ export type Bootstrap = {
     defaultProxyId: string | null;
     workspaceRoots: string[];
     approvalPolicy: ApprovalPolicy;
+    networkAccess: boolean;
     theme: "system" | "light" | "dark" | "ink";
     backgroundEnabled: boolean;
     backgroundOpacity: number;
+    backgroundFit: "cover" | "contain" | "stretch" | "tile";
+    backgroundPosition: "center" | "top" | "bottom";
+    backgroundBlur: number;
+    backgroundPanelOpacity: number;
+    fnosInstructionsEnabled: boolean;
+    fnosInstructions: string;
+    personalInstructions: string;
   };
   bridge: BridgeState;
   account: Account | null;
+  accounts: CodexAccountProfile[];
+  activeAccountId: string;
   codex: CodexUpdateState;
   appearance: { hasBackground: boolean; updatedAt: number | null };
+  notificationSummary: NotificationSummary;
 };
 
 export type AppEvent =
@@ -154,4 +345,6 @@ export type AppEvent =
   | { kind: "bridge_error"; message: string }
   | { kind: "server_request"; request: { id: number; method: string; params: Record<string, unknown> } }
   | { kind: "notification"; method: string; params: Record<string, any> }
+  | { kind: "notification_changed"; summary: NotificationSummary; at: number }
+  | { kind: "thread_created"; projectId: string; thread: Thread; at: number }
   | { kind: "heartbeat"; at: number };

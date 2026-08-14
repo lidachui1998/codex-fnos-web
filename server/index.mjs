@@ -3,10 +3,14 @@ import { mkdirSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createApiHandler } from "./api-router.mjs";
+import { AccountService, resolveCodexAccountHome } from "./account-service.mjs";
 import { AppServerBridge } from "./app-server-bridge.mjs";
 import { AppearanceService } from "./appearance-service.mjs";
 import { CodexUpdater } from "./codex-updater.mjs";
+import { ConversationService } from "./conversation-service.mjs";
 import { openDatabase } from "./database.mjs";
+import { GitHubSkillInstaller } from "./github-skill-installer.mjs";
+import { GlobalExtensionService } from "./global-extension-service.mjs";
 import {
   clearSessionCookie,
   isAuthorized,
@@ -18,9 +22,11 @@ import {
 } from "./lib/access-control.mjs";
 import { frameAncestors } from "./lib/frame-policy.mjs";
 import { readJson, sendError, sendJson, serveStatic } from "./lib/http.mjs";
-import { createInternalToken, loadOrCreateMasterKey } from "./lib/security.mjs";
+import { createInternalToken, isInternalAuthorized, loadOrCreateMasterKey } from "./lib/security.mjs";
 import { handleProviderGateway } from "./provider-gateway.mjs";
+import { NotificationService } from "./notification-service.mjs";
 import { SseHub } from "./sse-hub.mjs";
+import { ScheduleService } from "./schedule-service.mjs";
 import { SkillService } from "./skill-service.mjs";
 import { Stores } from "./stores.mjs";
 import { WorkspaceService } from "./workspace-service.mjs";
@@ -39,7 +45,8 @@ mkdirSync(join(dataDir, "workspaces"), { recursive: true });
 
 const access = loadAccessControl(join(dataDir, "secrets", "access-token"));
 const masterKey = loadOrCreateMasterKey(join(dataDir, "secrets", "master.key"));
-const db = openDatabase(join(dataDir, "codex-fnos.sqlite"));
+const databasePath = join(dataDir, "codex-fnos.sqlite");
+const db = openDatabase(databasePath);
 const configuredCandidates = (process.env.WORKSPACE_CANDIDATES || "")
   .split(delimiter)
   .map((item) => item.trim())
@@ -59,14 +66,54 @@ const updater = new CodexUpdater({
 });
 const hub = new SseHub();
 const gatewayToken = createInternalToken();
+const baseCodexHome = resolve(process.env.CODEX_HOME || join(dataDir, "codex-home"));
+const accountsRoot = resolve(dataDir, "codex-accounts");
+const activeAccount = stores.ensureCodexAccount();
+const codexHome = resolveCodexAccountHome(baseCodexHome, accountsRoot, activeAccount);
 const bridge = new AppServerBridge({
   codexBin: updater.status().binaryPath,
-  codexHome: resolve(process.env.CODEX_HOME || join(dataDir, "codex-home")),
+  codexHome,
+  databasePath,
   gatewayBaseUrl: `http://127.0.0.1:${port}`,
   gatewayToken,
   stores,
 });
-const skills = new SkillService(bridge);
+const skillInstaller = new GitHubSkillInstaller({
+  codexHome,
+  getProxy: () => {
+    const id = stores.getSettings().defaultProxyId;
+    return id ? stores.getProxySecret(id) : null;
+  },
+});
+const extensions = new GlobalExtensionService({ getCodexHome: () => bridge.codexHome });
+const accounts = new AccountService({
+  stores,
+  bridge,
+  skillInstaller,
+  baseCodexHome,
+  accountsRoot,
+});
+const skills = new SkillService(bridge, { installer: skillInstaller });
+const notifications = new NotificationService({
+  stores,
+  bridge,
+  getProxy: () => {
+    const id = stores.getSettings().defaultProxyId;
+    return id ? stores.getProxySecret(id) : null;
+  },
+  onChanged: (summary) => hub.broadcast({ kind: "notification_changed", summary, at: Date.now() }),
+});
+const schedules = new ScheduleService({
+  stores,
+  bridge,
+  notifications,
+  onChanged: () => hub.broadcast({ kind: "schedule_changed", at: Date.now() }),
+});
+const conversations = new ConversationService({
+  stores,
+  bridge,
+  onCreated: ({ projectId, thread }) => hub.broadcast({ kind: "thread_created", projectId, thread, at: Date.now() }),
+});
 
 bridge.on("event", (event) => hub.broadcast(event));
 bridge.on("log", (event) => {
@@ -74,14 +121,23 @@ bridge.on("log", (event) => {
 });
 
 let restartTimer;
+let restartQueued = false;
 function queueBridgeRestart() {
+  restartQueued = true;
   clearTimeout(restartTimer);
-  restartTimer = setTimeout(() => {
+  const restartWhenIdle = () => {
+    if (!restartQueued) return;
+    if (bridge.hasActiveTurns()) {
+      restartTimer = setTimeout(restartWhenIdle, 5_000);
+      return;
+    }
+    restartQueued = false;
     bridge.restart().catch((error) => hub.broadcast({ kind: "bridge_error", message: error.message }));
-  }, 400);
+  };
+  restartTimer = setTimeout(restartWhenIdle, 400);
 }
 
-const handleApi = createApiHandler({ stores, bridge, queueBridgeRestart, appearance, updater, workspace, skills });
+const handleApi = createApiHandler({ stores, bridge, accounts, queueBridgeRestart, appearance, updater, workspace, skills, extensions, schedules, notifications });
 const loginFailures = new Map();
 const loginWindowMs = 5 * 60 * 1000;
 const maxLoginFailures = 5;
@@ -117,6 +173,14 @@ const server = createServer(async (req, res) => {
     const internal = url.pathname.match(/^\/internal\/providers\/(?<id>[^/]+)\/v1\/responses$/);
     if (req.method === "POST" && internal?.groups) {
       await handleProviderGateway(req, res, stores, gatewayToken, internal.groups.id);
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/internal/conversations") {
+      if (!isInternalAuthorized(req.headers.authorization, gatewayToken)) {
+        sendError(res, 401, "内部新会话入口认证失败");
+        return;
+      }
+      sendJson(res, 201, await conversations.create(await readJson(req)));
       return;
     }
     if (req.method === "GET" && url.pathname === "/api/auth/status") {
@@ -196,6 +260,9 @@ server.listen(port, host, () => {
 });
 
 async function shutdown() {
+  schedules.close();
+  notifications.close();
+  accounts.close();
   await bridge.stop();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(1), 5000).unref();

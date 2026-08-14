@@ -48,19 +48,24 @@ export function providerHeaders(provider, gatewayHeaders = {}) {
 
 export async function testProxy(proxy, target = "https://api.openai.com/v1/models") {
   const startedAt = performance.now();
-  const response = await fetch(target, {
-    agent: createProviderAgent(proxy),
-    headers: { "user-agent": "codex-fnos-web/0.5.0" },
-    redirect: "manual",
-    signal: AbortSignal.timeout(12_000),
-  });
-  response.body?.destroy();
-  return {
-    ok: true,
-    status: response.status,
-    latencyMs: Math.round(performance.now() - startedAt),
-    message: `代理链路已建立，目标返回 HTTP ${response.status}`,
-  };
+  try {
+    const response = await fetch(target, {
+      agent: createProviderAgent(proxy),
+      headers: { "user-agent": "codex-fnos-web/0.9.5" },
+      redirect: "manual",
+      signal: AbortSignal.timeout(12_000),
+    });
+    response.body?.destroy();
+    return {
+      ok: true,
+      status: response.status,
+      latencyMs: Math.round(performance.now() - startedAt),
+      message: `代理链路已建立，目标返回 HTTP ${response.status}`,
+    };
+  } catch (error) {
+    const details = error?.cause?.message || error?.message || "连接失败";
+    throw Object.assign(new Error(`NAS 无法通过这个代理访问外网：${details}`), { status: 502 });
+  }
 }
 
 export async function testProvider(provider, proxy) {

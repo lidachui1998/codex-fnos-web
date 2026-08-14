@@ -7,8 +7,15 @@ function skillPath(value) {
 }
 
 export class SkillService {
-  constructor(bridge) {
+  constructor(bridge, { installer } = {}) {
     this.bridge = bridge;
+    this.installer = installer;
+  }
+
+  async install(project, input) {
+    if (!this.installer) throw Object.assign(new Error("当前环境未启用 GitHub Skill 安装"), { status: 501 });
+    const installed = await this.installer.install(input);
+    return { installed, ...(await this.list(project, true)) };
   }
 
   async list(project, forceReload = false) {

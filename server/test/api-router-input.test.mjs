@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildTurnInput, readApprovalPolicy, readReasoningEffort } from "../api-router.mjs";
+import { buildTurnInput, readApprovalPolicy, readReasoningEffort, readRetryProvider } from "../api-router.mjs";
 
 test("turn input carries text files and images into app-server input", () => {
   assert.deepEqual(buildTurnInput({
@@ -38,4 +38,25 @@ test("approval policy only accepts per-thread app-server values", () => {
   assert.equal(readApprovalPolicy("never"), "never");
   assert.equal(readApprovalPolicy(""), undefined);
   assert.throws(() => readApprovalPolicy("global"), /审批方式无效/);
+});
+
+test("retry provider must be an explicitly selected enabled provider", () => {
+  const providers = [
+    { id: "enabled-api", enabled: true, model: "gpt-api" },
+    { id: "disabled-api", enabled: false, model: "gpt-disabled" },
+  ];
+  assert.deepEqual(readRetryProvider({ providerId: "enabled-api" }, providers), {
+    providerId: "enabled-api",
+    provider: providers[0],
+    model: "gpt-api",
+    effort: undefined,
+  });
+  assert.deepEqual(readRetryProvider({ providerId: null, model: "gpt-official" }, providers), {
+    providerId: null,
+    provider: null,
+    model: "gpt-official",
+    effort: undefined,
+  });
+  assert.throws(() => readRetryProvider({ providerId: "disabled-api" }, providers), /不存在或未启用/);
+  assert.throws(() => readRetryProvider({ providerId: "unselected-api" }, providers), /不存在或未启用/);
 });

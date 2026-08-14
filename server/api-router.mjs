@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { modelProviderKey } from "./app-server-bridge.mjs";
+import { createReadStream } from "node:fs";
+import { codexRuntimeConfig, modelProviderKey } from "./app-server-bridge.mjs";
+import { composeDeveloperInstructions } from "./instructions.mjs";
 import { readBuffer, readJson, route, sendError, sendJson } from "./lib/http.mjs";
+import { buildPluginInstallParams, quarantineLegacyPluginCache, resolvePluginInstallId, resolvePluginUninstallId } from "./plugin-install.mjs";
 import { endpoint, listProviderModels, testProvider, testProxy } from "./provider-client.mjs";
+import { decodeProviderRoute, encodeProviderRoute } from "./provider-routing.mjs";
 
 function normalizeThreadCwd(value) {
   let normalized = String(value ?? "").trim();
@@ -87,27 +91,59 @@ function readApprovalPolicy(value) {
   return policy;
 }
 
+function readRetryProvider(input, providers) {
+  const providerId = input.providerId ? String(input.providerId) : null;
+  const provider = providerId ? providers.find((item) => item.id === providerId) : null;
+  if (providerId && (!provider || !provider.enabled)) throw Object.assign(new Error("所选供应商不存在或未启用"), { status: 400 });
+  return {
+    providerId,
+    provider,
+    model: String(input.model || provider?.model || "").trim(),
+    effort: readReasoningEffort(input.effort),
+  };
+}
+
 function publicCodexStatus(value) {
   const { binaryPath: _binaryPath, packageVersion: _packageVersion, ...result } = value;
   return result;
 }
 
-export function createApiHandler({ stores, bridge, queueBridgeRestart, appearance, updater, workspace, skills }) {
+export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart, appearance, updater, workspace, skills, extensions, schedules, notifications }) {
   const findProject = (id) => stores.listProjects().find((item) => item.id === id);
   const findProvider = (id) => stores.listProviders().find((item) => item.id === id);
   const decorateThread = (thread, extra = {}) => {
     const preferences = stores.getThreadPreferences(thread.id);
+    const route = decodeProviderRoute(thread.model);
+    const runtimeModelProvider = thread.runtimeModelProvider ?? thread.modelProvider;
     return {
       ...thread,
+      model: route?.model ?? thread.model,
+      modelProvider: route ? modelProviderKey(route.providerId) : thread.modelProvider,
+      runtimeModelProvider,
       ...extra,
       approvalPolicy: preferences?.approvalPolicy ?? undefined,
+      networkAccess: preferences?.networkAccess ?? stores.getSettings().networkAccess,
       name: preferences?.name ?? undefined,
       pinned: preferences?.pinned ?? false,
+      archived: extra.archived ?? preferences?.archivedLocal ?? thread.archived ?? false,
     };
   };
   const sortThreads = (threads) => [...threads].sort((left, right) =>
     Number(Boolean(right.pinned)) - Number(Boolean(left.pinned))
       || Number(right.updatedAt ?? right.createdAt ?? 0) - Number(left.updatedAt ?? left.createdAt ?? 0));
+  const pluginRequest = async (method, params) => {
+    try {
+      return await bridge.request(method, params);
+    } catch (error) {
+      if (/method not found|unknown method|plugin.*not enabled/i.test(error.message)) {
+        const translated = new Error("当前 Codex 核心不支持插件接口，请先在“Codex 更新”中升级官方核心");
+        translated.status = 503;
+        translated.details = error.message;
+        throw translated;
+      }
+      throw error;
+    }
+  };
 
   return async function handleApi(req, res, url) {
     const { pathname, searchParams } = url;
@@ -116,22 +152,91 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
       let account = null;
       if (bridge.snapshot().status === "ready") {
         try {
-          account = await bridge.request("account/read", { refreshToken: false }, { timeoutMs: 15_000 });
+          account = await accounts.readActive();
         } catch {
           account = null;
         }
       }
       sendJson(res, 200, {
-        version: "0.5.0",
+        version: "0.9.5",
         providers: stores.listProviders(),
         proxies: stores.listProxies(),
         projects: stores.listProjects(),
         settings: stores.getSettings(),
         bridge: bridge.snapshot(),
         account,
+        accounts: accounts.list(),
+        activeAccountId: accounts.active().id,
         codex: publicCodexStatus(updater.status()),
         appearance: appearance.status(),
+        notificationSummary: notifications.summary(),
       });
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/api/notifications") {
+      sendJson(res, 200, notifications.list({
+        filter: searchParams.get("filter") || "all",
+        limit: searchParams.get("limit") || 100,
+      }));
+      return;
+    }
+    if (req.method === "POST" && pathname === "/api/notifications/read-all") {
+      sendJson(res, 200, { changed: notifications.markAllRead(), summary: notifications.summary() });
+      return;
+    }
+    params = route(req.method, pathname, { method: "PATCH", path: /^\/api\/notifications\/(?<id>[^/]+)$/ });
+    if (params) {
+      const input = await readJson(req);
+      const changed = notifications.markRead(params.id, input.read !== false);
+      sendJson(res, changed ? 200 : 404, { changed, summary: notifications.summary() });
+      return;
+    }
+    if (req.method === "GET" && pathname === "/api/notification-channels") {
+      sendJson(res, 200, { data: notifications.listChannels() });
+      return;
+    }
+    params = route(req.method, pathname, { method: "PATCH", path: /^\/api\/notification-channels\/(?<channel>[^/]+)$/ });
+    if (params) {
+      sendJson(res, 200, { channel: notifications.saveChannel(params.channel, await readJson(req)) });
+      return;
+    }
+    params = route(req.method, pathname, { method: "POST", path: /^\/api\/notification-channels\/(?<channel>[^/]+)\/test$/ });
+    if (params) {
+      sendJson(res, 200, await notifications.testChannel(params.channel));
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/api/schedules") {
+      sendJson(res, 200, { data: schedules.list(), safetyMode: "explicitUnrestrictedOptIn" });
+      return;
+    }
+    if (req.method === "POST" && pathname === "/api/schedules/import/preview") {
+      sendJson(res, 200, { preview: schedules.previewDesktopImport(await readJson(req, 1024 * 1024)) });
+      return;
+    }
+    if (req.method === "POST" && pathname === "/api/schedules/import") {
+      sendJson(res, 201, schedules.importDesktop(await readJson(req, 1024 * 1024)));
+      return;
+    }
+    if (req.method === "POST" && pathname === "/api/schedules") {
+      sendJson(res, 201, { task: schedules.save(await readJson(req)) });
+      return;
+    }
+    params = route(req.method, pathname, { method: "PATCH", path: /^\/api\/schedules\/(?<id>[^/]+)$/ });
+    if (params) {
+      sendJson(res, 200, { task: schedules.save(await readJson(req), params.id) });
+      return;
+    }
+    params = route(req.method, pathname, { method: "DELETE", path: /^\/api\/schedules\/(?<id>[^/]+)$/ });
+    if (params) {
+      const deleted = schedules.delete(params.id);
+      sendJson(res, deleted ? 200 : 404, { deleted });
+      return;
+    }
+    params = route(req.method, pathname, { method: "POST", path: /^\/api\/schedules\/(?<id>[^/]+)\/run$/ });
+    if (params) {
+      sendJson(res, 202, await schedules.runNow(params.id));
       return;
     }
 
@@ -149,11 +254,104 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
       sendJson(res, 200, await skills.setEnabled(project, await readJson(req)));
       return;
     }
+    params = route(req.method, pathname, { method: "POST", path: /^\/api\/projects\/(?<id>[^/]+)\/skills\/install$/ });
+    if (params) {
+      const project = findProject(params.id);
+      if (!project) return sendError(res, 404, "项目不存在");
+      sendJson(res, 201, await skills.install(project, await readJson(req, 8 * 1024)));
+      return;
+    }
+    params = route(req.method, pathname, { method: "POST", path: /^\/api\/projects\/(?<id>[^/]+)\/skills\/import$/ });
+    if (params) {
+      const project = findProject(params.id);
+      if (!project) return sendError(res, 404, "项目不存在");
+      const filename = String(searchParams.get("name") || "skill.zip").slice(0, 180);
+      const installed = extensions.importSkill(await readBuffer(req, 30 * 1024 * 1024), filename);
+      sendJson(res, 201, { installed, ...(await skills.list(project, true)) });
+      return;
+    }
     params = route(req.method, pathname, { method: "GET", path: /^\/api\/projects\/(?<id>[^/]+)\/skills\/detail$/ });
     if (params) {
       const project = findProject(params.id);
       if (!project) return sendError(res, 404, "项目不存在");
       sendJson(res, 200, await skills.read(project, searchParams.get("path") || ""));
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/api/plugins") {
+      const result = await pluginRequest("plugin/list", {
+        cwds: stores.listProjects().map((project) => project.path),
+        forceRefetch: searchParams.get("reload") === "1",
+      });
+      const data = (result.marketplaces ?? []).flatMap((marketplace) =>
+        (marketplace.plugins ?? []).map((plugin) => ({
+          ...plugin,
+          marketplaceName: marketplace.name,
+          marketplacePath: marketplace.path ?? null,
+        })));
+      sendJson(res, 200, {
+        data,
+        errors: result.marketplaceLoadErrors ?? [],
+        featuredPluginIds: result.featuredPluginIds ?? [],
+      });
+      return;
+    }
+    if (req.method === "POST" && pathname === "/api/plugins/install") {
+      const input = await readJson(req);
+      const pluginName = String(input.pluginName || "").trim();
+      if (!pluginName) return sendError(res, 400, "插件名称不能为空");
+      let catalog;
+      try {
+        catalog = await pluginRequest("plugin/list", {
+          cwds: stores.listProjects().map((project) => project.path),
+          forceRefetch: false,
+        });
+      } catch (error) {
+        const translated = new Error(`安装前无法解析插件远程 ID：${error.message}`);
+        translated.status = error.status || 502;
+        throw translated;
+      }
+      const resolved = resolvePluginInstallId(catalog, input);
+      const legacyCache = quarantineLegacyPluginCache(bridge.codexHome, input, resolved.pluginId);
+      const result = await pluginRequest("plugin/install", buildPluginInstallParams(resolved));
+      sendJson(res, 201, {
+        ...result,
+        resolvedPluginId: resolved.pluginId,
+        legacyCacheQuarantined: Boolean(legacyCache),
+      });
+      return;
+    }
+    if (req.method === "POST" && pathname === "/api/plugins/import") {
+      const filename = String(searchParams.get("name") || "plugin.zip").slice(0, 180);
+      const imported = extensions.importPlugin(await readBuffer(req, 30 * 1024 * 1024), filename);
+      let installation = null;
+      let installError = null;
+      try {
+        const catalog = await pluginRequest("plugin/list", {
+          cwds: stores.listProjects().map((project) => project.path),
+          forceRefetch: true,
+        });
+        const resolved = resolvePluginInstallId(catalog, {
+          pluginName: imported.name,
+          marketplaceName: imported.marketplaceName,
+        });
+        installation = await pluginRequest("plugin/install", buildPluginInstallParams(resolved));
+      } catch (error) {
+        installError = error.message || "插件已导入全局市场，但自动安装失败";
+      }
+      sendJson(res, 201, { imported, installation, installError });
+      return;
+    }
+    params = route(req.method, pathname, { method: "DELETE", path: /^\/api\/plugins\/(?<id>[^/]+)$/ });
+    if (params) {
+      const requestedId = decodeURIComponent(params.id);
+      const catalog = await pluginRequest("plugin/list", {
+        cwds: stores.listProjects().map((project) => project.path),
+        forceRefetch: false,
+      });
+      const pluginId = resolvePluginUninstallId(catalog, requestedId);
+      await pluginRequest("plugin/uninstall", { pluginId });
+      sendJson(res, 200, { uninstalled: true, resolvedPluginId: pluginId });
       return;
     }
 
@@ -355,11 +553,66 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
       sendJson(res, 200, workspace.list(project, searchParams.get("path") || ""));
       return;
     }
+    params = route(req.method, pathname, { method: "GET", path: /^\/api\/projects\/(?<id>[^/]+)\/files\/search$/ });
+    if (params) {
+      const project = findProject(params.id);
+      if (!project) return sendError(res, 404, "项目不存在");
+      sendJson(res, 200, workspace.search(project, searchParams.get("query") || "", searchParams.get("limit") || 20));
+      return;
+    }
+    params = route(req.method, pathname, { method: "GET", path: /^\/api\/projects\/(?<id>[^/]+)\/artifacts$/ });
+    if (params) {
+      const project = findProject(params.id);
+      if (!project) return sendError(res, 404, "项目不存在");
+      sendJson(res, 200, workspace.artifacts(project, searchParams.get("limit") || 120));
+      return;
+    }
     params = route(req.method, pathname, { method: "GET", path: /^\/api\/projects\/(?<id>[^/]+)\/file$/ });
     if (params) {
       const project = findProject(params.id);
       if (!project) return sendError(res, 404, "项目不存在");
       sendJson(res, 200, workspace.read(project, searchParams.get("path") || ""));
+      return;
+    }
+    params = route(req.method, pathname, { method: "GET", path: /^\/api\/projects\/(?<id>[^/]+)\/file\/download$/ });
+    if (params) {
+      const project = findProject(params.id);
+      if (!project) return sendError(res, 404, "项目不存在");
+      const file = workspace.download(project, searchParams.get("path") || "");
+      const fallbackName = file.name.replace(/[^a-z0-9._-]+/gi, "_") || "download";
+      res.writeHead(200, {
+        "cache-control": "private, no-store",
+        "content-disposition": `attachment; filename="${fallbackName}"; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+        "content-length": String(file.size),
+        "content-type": "application/octet-stream",
+        "x-content-type-options": "nosniff",
+      });
+      const stream = createReadStream(file.target);
+      stream.on("error", () => res.destroy());
+      stream.pipe(res);
+      return;
+    }
+    params = route(req.method, pathname, { method: "GET", path: /^\/api\/projects\/(?<id>[^/]+)\/file\/view$/ });
+    if (params) {
+      const project = findProject(params.id);
+      if (!project) return sendError(res, 404, "项目不存在");
+      const file = workspace.view(project, searchParams.get("path") || "");
+      const fallbackName = file.name.replace(/[^a-z0-9._-]+/gi, "_") || "preview";
+      const headers = {
+        "cache-control": "private, no-store",
+        "content-disposition": `inline; filename="${fallbackName}"; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+        "content-length": String(file.size),
+        "content-type": file.mimeType,
+        "referrer-policy": "no-referrer",
+        "x-content-type-options": "nosniff",
+      };
+      if (file.kind === "html") {
+        headers["content-security-policy"] = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' data: blob:; style-src 'unsafe-inline' data:; img-src * data: blob:; font-src data:; media-src * data: blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'";
+      }
+      res.writeHead(200, headers);
+      const stream = createReadStream(file.target);
+      stream.on("error", () => res.destroy());
+      stream.pipe(res);
       return;
     }
     params = route(req.method, pathname, { method: "GET", path: /^\/api\/projects\/(?<id>[^/]+)\/changes$/ });
@@ -396,8 +649,10 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
       const projects = stores.listProjects();
       const decorateSearchResult = (thread, isArchived) => {
         const project = projects.find((item) => normalizeThreadCwd(item.path) === normalizeThreadCwd(thread.cwd));
+        const preferences = stores.getThreadPreferences(thread.id);
+        if (project && preferences?.projectId !== project.id) stores.saveThreadProjectId(thread.id, project.id);
         return decorateThread(thread, {
-          archived: isArchived,
+          archived: isArchived || Boolean(preferences?.archivedLocal),
           projectId: project?.id,
           projectName: project?.name,
         });
@@ -423,23 +678,48 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
     if (req.method === "GET" && pathname === "/api/threads") {
       const cwd = searchParams.get("cwd") || undefined;
       const archived = searchParams.get("archived") === "1";
-      const result = await bridge.request("thread/list", {
+      const list = (serverArchived) => bridge.request("thread/list", {
         limit: 100,
-        archived,
-        // An empty provider list means "all providers". Without it, app-server
-        // silently limits results to its process-level default provider and hides
-        // threads created with a third-party provider override.
+        archived: serverArchived,
         modelProviders: [],
         sourceKinds: threadSourceKinds,
       });
+      const activeResult = await list(false);
+      const active = filterThreadsByCwd(activeResult, cwd);
+      const project = cwd
+        ? stores.listProjects().find((item) => normalizeThreadCwd(item.path) === normalizeThreadCwd(cwd))
+        : null;
+      const rememberProject = (thread) => {
+        if (project && stores.getThreadPreferences(thread.id)?.projectId !== project.id) {
+          stores.saveThreadProjectId(thread.id, project.id);
+        }
+        return thread;
+      };
+      for (const thread of active.data ?? []) rememberProject(thread);
+      if (archived) {
+        const serverArchived = filterThreadsByCwd(await list(true), cwd);
+        for (const thread of serverArchived.data ?? []) rememberProject(thread);
+        const unique = new Map();
+        for (const thread of serverArchived.data ?? []) {
+          if (!stores.getThreadPreferences(thread.id)?.deleted) unique.set(thread.id, decorateThread(thread, { archived: true, storageArchived: true }));
+        }
+        for (const thread of active.data ?? []) {
+          const preferences = stores.getThreadPreferences(thread.id);
+          if (preferences?.archivedLocal && !preferences.deleted) unique.set(thread.id, decorateThread(thread, { archived: true, storageArchived: false }));
+        }
+        sendJson(res, 200, { data: sortThreads([...unique.values()]), nextCursor: null });
+        return;
+      }
       // Filter after listing. On Windows, Codex persists canonical cwd values
       // with a \\?\ prefix, which does not match thread/list's SQL cwd filter.
-      const filtered = filterThreadsByCwd(result, cwd);
       sendJson(res, 200, {
-        ...filtered,
-        data: sortThreads(filtered.data
-          ?.filter((thread) => !stores.getThreadPreferences(thread.id)?.deleted)
-          .map((thread) => decorateThread(thread, { archived })) ?? []),
+        ...active,
+        data: sortThreads(active.data
+          ?.filter((thread) => {
+            const preferences = stores.getThreadPreferences(thread.id);
+            return !preferences?.deleted && !preferences?.archivedLocal;
+          })
+          .map((thread) => decorateThread(thread, { archived: false, storageArchived: false })) ?? []),
       });
       return;
     }
@@ -450,28 +730,39 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
       const providerId = input.providerId || project.defaultProviderId || null;
       const provider = providerId ? findProvider(providerId) : null;
       const approvalPolicy = readApprovalPolicy(input.approvalPolicy) ?? stores.getSettings().approvalPolicy;
+      const networkAccess = Object.hasOwn(input, "networkAccess")
+        ? Boolean(input.networkAccess)
+        : stores.getSettings().networkAccess;
       const result = await bridge.request("thread/start", {
         cwd: project.path,
         modelProvider: modelProviderKey(providerId),
         model: input.model || provider?.model || undefined,
-        config: input.effort ? { model_reasoning_effort: readReasoningEffort(input.effort) } : undefined,
+        config: codexRuntimeConfig(readReasoningEffort(input.effort)),
         approvalPolicy,
         sandbox: "workspace-write",
+        developerInstructions: composeDeveloperInstructions(stores.getSettings(), project.instructions),
         personality: "friendly",
         serviceName: "codex_fnos_web",
       });
       stores.saveThreadApprovalPolicy(result.thread.id, result.approvalPolicy ?? approvalPolicy);
-      sendJson(res, 201, result);
+      stores.saveThreadNetworkAccess(result.thread.id, networkAccess);
+      stores.saveThreadProjectId(result.thread.id, project.id);
+      sendJson(res, 201, { ...result, thread: decorateThread(result.thread), approvalPolicy: result.approvalPolicy ?? approvalPolicy, networkAccess });
       return;
     }
     params = route(req.method, pathname, { method: "GET", path: /^\/api\/threads\/(?<id>[^/]+)$/ });
     if (params) {
-      sendJson(res, 200, await bridge.request("thread/read", { threadId: params.id, includeTurns: true }));
+      const result = await bridge.request("thread/read", { threadId: params.id, includeTurns: true });
+      const project = stores.listProjects().find((item) => normalizeThreadCwd(item.path) === normalizeThreadCwd(result.thread?.cwd));
+      if (project) stores.saveThreadProjectId(params.id, project.id);
+      sendJson(res, 200, {
+        ...result,
+        thread: result.thread ? decorateThread(result.thread, { projectId: project?.id }) : result.thread,
+      });
       return;
     }
     params = route(req.method, pathname, { method: "DELETE", path: /^\/api\/threads\/(?<id>[^/]+)$/ });
     if (params) {
-      await bridge.request("thread/archive", { threadId: params.id });
       stores.saveThreadDeleted(params.id);
       sendJson(res, 200, { deleted: true });
       return;
@@ -492,10 +783,42 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
       if (approvalPolicy && approvalPolicy !== result.approvalPolicy) {
         await bridge.request("thread/settings/update", { threadId: params.id, approvalPolicy });
       }
+      const thread = decorateThread({ ...result.thread, model: result.model, modelProvider: result.modelProvider ?? result.thread?.modelProvider });
       sendJson(res, 200, {
         ...result,
-        thread: decorateThread(result.thread),
+        thread,
+        model: thread.model ?? result.model,
+        modelProvider: thread.modelProvider ?? result.modelProvider,
         approvalPolicy: approvalPolicy ?? result.approvalPolicy,
+        networkAccess: stores.getThreadPreferences(params.id)?.networkAccess ?? stores.getSettings().networkAccess,
+      });
+      return;
+    }
+    params = route(req.method, pathname, { method: "POST", path: /^\/api\/threads\/(?<id>[^/]+)\/provider$/ });
+    if (params) {
+      const input = await readJson(req);
+      const { providerId, model, effort } = readRetryProvider(input, stores.listProviders());
+      const current = await bridge.request("thread/read", { threadId: params.id, includeTurns: false });
+      const runtimeModelProvider = String(current.thread?.modelProvider || "");
+      const runtimeProviderId = runtimeModelProvider.startsWith("fnos-") ? runtimeModelProvider.slice(5) : null;
+      if (runtimeProviderId && !providerId) return sendError(res, 409, "当前聊天使用第三方 API，重试不会切换到未选择的 ChatGPT 官网供应商");
+      if (!runtimeProviderId && providerId) return sendError(res, 409, "官方 ChatGPT 聊天不能在原线程内改走第三方 API，请先从模型选择器创建 API 会话");
+      const routedModel = runtimeProviderId && providerId !== runtimeProviderId
+        ? encodeProviderRoute(providerId, model)
+        : model;
+      await bridge.request("thread/settings/update", {
+        threadId: params.id,
+        model: routedModel || undefined,
+        effort,
+      });
+      const thread = decorateThread({ ...current.thread, model: routedModel || current.thread?.model });
+      sendJson(res, 200, {
+        thread,
+        model: thread.model,
+        modelProvider: thread.modelProvider,
+        reasoningEffort: effort ?? thread.reasoningEffort ?? null,
+        approvalPolicy: stores.getThreadApprovalPolicy(params.id),
+        networkAccess: stores.getThreadPreferences(params.id)?.networkAccess ?? stores.getSettings().networkAccess,
       });
       return;
     }
@@ -503,13 +826,15 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
     if (params) {
       const input = await readJson(req);
       const approvalPolicy = readApprovalPolicy(input.approvalPolicy);
-      sendJson(res, 200, await bridge.request("thread/settings/update", {
+      const result = await bridge.request("thread/settings/update", {
         threadId: params.id,
         model: input.model || undefined,
         effort: readReasoningEffort(input.effort),
         approvalPolicy,
-      }));
+      });
       if (approvalPolicy) stores.saveThreadApprovalPolicy(params.id, approvalPolicy);
+      if (Object.hasOwn(input, "networkAccess")) stores.saveThreadNetworkAccess(params.id, Boolean(input.networkAccess));
+      sendJson(res, 200, { ...result, networkAccess: stores.getThreadPreferences(params.id)?.networkAccess ?? stores.getSettings().networkAccess });
       return;
     }
     params = route(req.method, pathname, { method: "POST", path: /^\/api\/threads\/(?<id>[^/]+)\/fork$/ });
@@ -522,27 +847,46 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
       });
       const approvalPolicy = stores.getThreadApprovalPolicy(params.id);
       if (approvalPolicy && result.thread?.id) stores.saveThreadApprovalPolicy(result.thread.id, approvalPolicy);
-      sendJson(res, 201, result);
+      const networkAccess = stores.getThreadPreferences(params.id)?.networkAccess ?? stores.getSettings().networkAccess;
+      if (result.thread?.id) stores.saveThreadNetworkAccess(result.thread.id, networkAccess);
+      const projectId = stores.getThreadPreferences(params.id)?.projectId ?? null;
+      if (result.thread?.id) stores.saveThreadProjectId(result.thread.id, projectId);
+      sendJson(res, 201, { ...result, thread: result.thread ? decorateThread(result.thread) : result.thread, approvalPolicy: approvalPolicy ?? result.approvalPolicy, networkAccess });
       return;
     }
     params = route(req.method, pathname, { method: "POST", path: /^\/api\/threads\/(?<id>[^/]+)\/archive$/ });
     if (params) {
-      sendJson(res, 200, await bridge.request("thread/archive", { threadId: params.id }));
+      stores.saveThreadArchived(params.id, true);
+      sendJson(res, 200, { archived: true, threadId: params.id });
       return;
     }
     params = route(req.method, pathname, { method: "POST", path: /^\/api\/threads\/(?<id>[^/]+)\/unarchive$/ });
     if (params) {
-      sendJson(res, 200, await bridge.request("thread/unarchive", { threadId: params.id }));
+      const serverArchived = await bridge.request("thread/list", {
+        limit: 100,
+        archived: true,
+        modelProviders: [],
+        sourceKinds: threadSourceKinds,
+      });
+      let restored = null;
+      if ((serverArchived.data ?? []).some((thread) => thread.id === params.id)) {
+        restored = await bridge.request("thread/unarchive", { threadId: params.id });
+      }
+      stores.saveThreadArchived(params.id, false);
+      sendJson(res, 200, { archived: false, threadId: params.id, restored });
       return;
     }
     params = route(req.method, pathname, { method: "POST", path: /^\/api\/threads\/(?<id>[^/]+)\/turns$/ });
     if (params) {
       const input = await readJson(req, 12 * 1024 * 1024);
       const approvalPolicy = readApprovalPolicy(input.approvalPolicy);
+      const project = findProject(input.projectId);
+      if (!project) return sendError(res, 404, "当前会话所属项目不存在");
+      const networkAccess = Object.hasOwn(input, "networkAccess")
+        ? Boolean(input.networkAccess)
+        : stores.getThreadPreferences(params.id)?.networkAccess ?? stores.getSettings().networkAccess;
       let availableSkills = [];
       if (Array.isArray(input.skills) && input.skills.length > 0) {
-        const project = findProject(input.projectId);
-        if (!project) return sendError(res, 404, "当前会话所属项目不存在");
         availableSkills = (await skills.list(project, false)).skills;
       }
       sendJson(res, 202, await bridge.request("turn/start", {
@@ -550,10 +894,31 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
         clientUserMessageId: input.clientId || randomUUID(),
         input: buildTurnInput(input, availableSkills),
         approvalPolicy,
+        sandboxPolicy: { type: "workspaceWrite", writableRoots: [project.path], networkAccess },
         model: input.model || undefined,
         effort: readReasoningEffort(input.effort),
       }));
       if (approvalPolicy) stores.saveThreadApprovalPolicy(params.id, approvalPolicy);
+      stores.saveThreadNetworkAccess(params.id, networkAccess);
+      return;
+    }
+    params = route(req.method, pathname, { method: "POST", path: /^\/api\/threads\/(?<id>[^/]+)\/steer$/ });
+    if (params) {
+      const input = await readJson(req, 12 * 1024 * 1024);
+      const expectedTurnId = typeof input.expectedTurnId === "string" ? input.expectedTurnId.trim() : "";
+      if (!expectedTurnId) return sendError(res, 400, "缺少当前任务 ID，无法立即追加消息");
+      const project = findProject(input.projectId);
+      if (!project) return sendError(res, 404, "当前会话所属项目不存在");
+      let availableSkills = [];
+      if (Array.isArray(input.skills) && input.skills.length > 0) {
+        availableSkills = (await skills.list(project, false)).skills;
+      }
+      sendJson(res, 202, await bridge.request("turn/steer", {
+        threadId: params.id,
+        clientUserMessageId: input.clientId || randomUUID(),
+        input: buildTurnInput(input, availableSkills),
+        expectedTurnId,
+      }));
       return;
     }
     params = route(req.method, pathname, { method: "POST", path: /^\/api\/threads\/(?<id>[^/]+)\/interrupt$/ });
@@ -570,7 +935,48 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
       return;
     }
     if (req.method === "GET" && pathname === "/api/account") {
-      sendJson(res, 200, await bridge.request("account/read", { refreshToken: false }));
+      sendJson(res, 200, await accounts.readActive({ refresh: searchParams.get("refresh") === "1" }));
+      return;
+    }
+    if (req.method === "POST" && pathname === "/api/accounts") {
+      const profile = await accounts.create(await readJson(req));
+      sendJson(res, 201, { profile, accounts: accounts.list(), bridge: bridge.snapshot() });
+      return;
+    }
+    params = route(req.method, pathname, { method: "POST", path: /^\/api\/accounts\/(?<id>[^/]+)\/switch$/ });
+    if (params) {
+      const profile = await accounts.switchTo(decodeURIComponent(params.id));
+      sendJson(res, 200, { profile, accounts: accounts.list(), bridge: bridge.snapshot() });
+      return;
+    }
+    params = route(req.method, pathname, { method: "DELETE", path: /^\/api\/accounts\/(?<id>[^/]+)$/ });
+    if (params) {
+      sendJson(res, 200, await accounts.delete(decodeURIComponent(params.id)));
+      return;
+    }
+    params = route(req.method, pathname, { method: "GET", path: /^\/api\/account\/login\/(?<id>[^/]+)$/ });
+    if (params) {
+      const attempt = bridge.loginStatus(params.id);
+      if (!attempt) return sendError(res, 404, "登录记录不存在或服务已重启，请重新生成设备码");
+      let account = null;
+      try {
+        account = await accounts.readActive({ refresh: true });
+      } catch {
+        // Keep the attempt state visible while app-server finishes persisting credentials.
+      }
+      if (account?.account) {
+        sendJson(res, 200, { status: "success", account });
+        return;
+      }
+      if (attempt.status === "error") {
+        sendJson(res, 200, { status: "error", error: attempt.error || "ChatGPT 登录失败" });
+        return;
+      }
+      if (attempt.status === "success" && Date.now() - attempt.updatedAt > 8_000) {
+        sendJson(res, 200, { status: "error", error: "网页授权已完成，但 NAS 端没有读到登录凭据。请检查 CODEX_HOME 写入权限和应用日志后重试。" });
+        return;
+      }
+      sendJson(res, 200, { status: "pending", browserCompleted: attempt.status === "success" });
       return;
     }
     if (req.method === "POST" && pathname === "/api/account/login") {
@@ -579,7 +985,9 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
         ? { type: "apiKey", apiKey: input.apiKey }
         : { type: "chatgptDeviceCode" };
       try {
-        sendJson(res, 200, await bridge.request("account/login/start", login));
+        const result = await bridge.request("account/login/start", login);
+        if (result?.loginId) bridge.trackLogin(result.loginId);
+        sendJson(res, 200, result);
       } catch (error) {
         if (input.type !== "apiKey" && /403|forbidden|device code request failed/i.test(error.message)) {
           const translated = new Error("ChatGPT 设备码登录被官方接口拒绝（HTTP 403）。第三方供应商无需在这里登录；如需使用官方 ChatGPT，请先设置可用的应用默认代理，或改用 OpenAI API Key。");
@@ -592,7 +1000,7 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
       return;
     }
     if (req.method === "POST" && pathname === "/api/account/logout") {
-      sendJson(res, 200, await bridge.request("account/logout", {}));
+      sendJson(res, 200, await accounts.logout());
       return;
     }
     if (req.method === "POST" && pathname === "/api/bridge/restart") {
@@ -605,4 +1013,4 @@ export function createApiHandler({ stores, bridge, queueBridgeRestart, appearanc
   };
 }
 
-export { buildTurnInput, readApprovalPolicy, readReasoningEffort };
+export { buildTurnInput, readApprovalPolicy, readReasoningEffort, readRetryProvider };

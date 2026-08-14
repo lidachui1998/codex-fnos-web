@@ -1,5 +1,5 @@
-import { Bot, Check, CheckCircle2, ChevronDown, ChevronRight, Copy, FileCode2, LoaderCircle, Maximize2, Pencil, RefreshCw, RotateCcw, TerminalSquare, UserRound, Wrench, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { AlertTriangle, Bot, Check, CheckCircle2, ChevronDown, ChevronRight, Clock3, Copy, FileCode2, LoaderCircle, Maximize2, Pencil, RefreshCw, RotateCcw, TerminalSquare, UserRound, Wrench, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ThreadItem } from "../types";
@@ -44,6 +44,7 @@ function ToolItem({ item }: { item: ThreadItem }) {
         <Icon size={16} />
         <span>{title || "正在执行工具"}</span>
         <em className={`status-dot ${item.status ?? "inProgress"}`}>{item.status === "completed" ? <CheckCircle2 size={14} /> : <LoaderCircle size={14} />}</em>
+        {Number.isFinite(item.durationMs) && <small className="tool-duration"><Clock3 size={11} />{durationText(Number(item.durationMs))}</small>}
         {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
       </button>
       {open && (isFile
@@ -78,21 +79,77 @@ type Props = {
   items: ThreadItem[];
   streamingItemId?: string | null;
   turnRunning?: boolean;
+  activeTurnStartedAtMs?: number | null;
+  retryProviders: RetryProviderOption[];
+  retryProviderId: string;
   projectPath: string;
   onOpenFile: (path: string) => void;
   onSuggestion?: (text: string) => void;
-  onResend: (item: ThreadItem) => void;
-  onRegenerate: (item: ThreadItem) => void;
+  onResend: (item: ThreadItem, providerId: string) => void;
+  onRegenerate: (item: ThreadItem, providerId: string) => void;
   onEditBranch: (item: ThreadItem) => void;
 };
 
-export function Timeline({ items, streamingItemId, turnRunning, projectPath, onOpenFile, onSuggestion, onResend, onRegenerate, onEditBranch }: Props) {
+export type RetryProviderOption = {
+  id: string;
+  name: string;
+  model: string;
+};
+
+function durationText(durationMs: number) {
+  const seconds = Math.max(0, Math.round(durationMs / 1000));
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes < 60) return remainingSeconds ? `${minutes} 分 ${remainingSeconds} 秒` : `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes ? `${hours} 小时 ${remainingMinutes} 分` : `${hours} 小时`;
+}
+
+function itemDurationMs(item: ThreadItem) {
+  if (Number.isFinite(item.turnDurationMs)) return Math.max(0, Number(item.turnDurationMs));
+  if (Number.isFinite(item.turnStartedAt) && Number.isFinite(item.turnCompletedAt)) {
+    return Math.max(0, (Number(item.turnCompletedAt) - Number(item.turnStartedAt)) * 1000);
+  }
+  return null;
+}
+
+export function Timeline({ items, streamingItemId, turnRunning, activeTurnStartedAtMs, retryProviders, retryProviderId, projectPath, onOpenFile, onSuggestion, onResend, onRegenerate, onEditBranch }: Props) {
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [visibleLimit, setVisibleLimit] = useState(140);
+  const [retryItemId, setRetryItemId] = useState<string | null>(null);
+  const [draftRetryProviderId, setDraftRetryProviderId] = useState(retryProviderId);
+  const [nowMs, setNowMs] = useState(Date.now());
   const renderableItems = useMemo(() => items.filter((item) => item.type !== "reasoning" || item.summary?.some((text) => text.trim())), [items]);
   const hiddenCount = Math.max(0, renderableItems.length - visibleLimit);
   const visibleItems = hiddenCount > 0 ? renderableItems.slice(hiddenCount) : renderableItems;
+
+  useEffect(() => {
+    if (!turnRunning || !activeTurnStartedAtMs) return;
+    setNowMs(Date.now());
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [turnRunning, activeTurnStartedAtMs]);
+
+  function retryControl(item: ThreadItem, label: string, run: (item: ThreadItem, providerId: string) => void, disabled = false) {
+    const open = retryItemId === item.id;
+    const fallbackProviderId = retryProviders.some((provider) => provider.id === retryProviderId)
+      ? retryProviderId
+      : retryProviders[0]?.id ?? "";
+    return <div className="retry-control">
+      <button disabled={disabled || retryProviders.length === 0} onClick={() => {
+        setDraftRetryProviderId(fallbackProviderId);
+        setRetryItemId(open ? null : item.id);
+      }}><RefreshCw size={13} />{label}<ChevronDown size={11} /></button>
+      {open && <div className="retry-provider-picker" role="dialog" aria-label="选择重试供应商">
+        <label><span>使用供应商</span><select value={draftRetryProviderId} onChange={(event) => setDraftRetryProviderId(event.target.value)}>{retryProviders.map((provider) => <option key={provider.id || "official"} value={provider.id}>{provider.name} · {provider.model}</option>)}</select></label>
+        <small>只列出已启用或你当前明确选择的供应商，不会自动跳转。</small>
+        <div><button className="retry-provider-cancel" onClick={() => setRetryItemId(null)}>取消</button><button className="retry-provider-submit" onClick={() => { setRetryItemId(null); run(item, draftRetryProviderId); }}>开始重试</button></div>
+      </div>}
+    </div>;
+  }
 
   async function copyItem(item: ThreadItem, value: string) {
     await copyText(value);
@@ -116,22 +173,28 @@ export function Timeline({ items, streamingItemId, turnRunning, projectPath, onO
   return (
     <div className="timeline">
       {hiddenCount > 0 && <button className="load-earlier" onClick={() => setVisibleLimit((value) => value + 120)}><RotateCcw size={14} />加载更早的 {Math.min(hiddenCount, 120)} 项</button>}
-      {visibleItems.map((item) => {
+      {visibleItems.map((item, visibleIndex) => {
         if (item.type === "userMessage") {
           const text = userText(item);
           const images = userImages(item);
-          return <article className="message user-message" key={item.id}><div className="message-avatar"><UserRound size={16} /></div><div className="message-body"><div className="message-label">你</div>{images.length > 0 && <div className={`message-images ${images.length > 1 ? "multiple" : ""}`}>{images.map((url, index) => <button key={`${item.id}-${index}`} onClick={() => setPreviewImage(url)} title="点击放大图片"><img src={url} alt={`发送的图片 ${index + 1}`} loading="lazy" /><span><Maximize2 size={14} /></span></button>)}</div>}{text && <div className="message-text">{text}</div>}<div className="message-actions"><button onClick={() => void copyItem(item, text)}>{copiedId === item.id ? <Check size={13} /> : <Copy size={13} />}{copiedId === item.id ? "已复制" : "复制"}</button><button onClick={() => onResend(item)}><RefreshCw size={13} />重新发送</button><button disabled={!item.turnId || turnRunning} onClick={() => onEditBranch(item)}><Pencil size={13} />编辑并分支</button></div></div></article>;
+          return <article className="message user-message" key={item.id}><div className="message-avatar"><UserRound size={16} /></div><div className="message-body"><div className="message-label">你</div>{images.length > 0 && <div className={`message-images ${images.length > 1 ? "multiple" : ""}`}>{images.map((url, index) => <button key={`${item.id}-${index}`} onClick={() => setPreviewImage(url)} title="点击放大图片"><img src={url} alt={`发送的图片 ${index + 1}`} loading="lazy" /><span><Maximize2 size={14} /></span></button>)}</div>}{text && <div className="message-text">{text}</div>}<div className="message-actions"><button onClick={() => void copyItem(item, text)}>{copiedId === item.id ? <Check size={13} /> : <Copy size={13} />}{copiedId === item.id ? "已复制" : "复制"}</button>{retryControl(item, "重新发送", onResend, Boolean(turnRunning))}<button disabled={!item.turnId || turnRunning} onClick={() => onEditBranch(item)}><Pencil size={13} />编辑并分支</button></div></div></article>;
         }
         if (item.type === "agentMessage" || item.type === "plan") {
-          return <article className="message agent-message" key={item.id}><div className="message-avatar agent"><Bot size={16} /></div><div className="message-body"><div className="message-label">Codex</div><div className="message-text markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ children, href, node: _node, ...props }) => {
+          const duration = itemDurationMs(item);
+          return <article className="message agent-message" key={item.id}><div className="message-avatar agent"><Bot size={16} /></div><div className="message-body"><div className="message-label">Codex{duration !== null && <span className="execution-duration"><Clock3 size={11} />执行 {durationText(duration)}</span>}</div><div className="message-text markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ children, href, node: _node, ...props }) => {
             const file = workspaceFileHref(href, projectPath);
             return file
               ? <a {...props} href={href} className="workspace-file-link" onClick={(event) => { event.preventDefault(); onOpenFile(file); }} title="在项目文件中打开">{children}</a>
               : <a {...props} href={href} target="_blank" rel="noreferrer">{children}</a>;
-          } }}>{item.text ?? ""}</ReactMarkdown>{streamingItemId === item.id && <span className="stream-caret" />}</div>{streamingItemId !== item.id && <div className="message-actions"><button onClick={() => void copyItem(item, item.text ?? "")}>{copiedId === item.id ? <Check size={13} /> : <Copy size={13} />}{copiedId === item.id ? "已复制" : "复制"}</button><button disabled={!item.turnId || turnRunning} onClick={() => onRegenerate(item)}><RefreshCw size={13} />重新生成</button></div>}</div></article>;
+          } }}>{item.text ?? ""}</ReactMarkdown>{streamingItemId === item.id && <span className="stream-caret" />}</div>{streamingItemId !== item.id && <div className="message-actions"><button onClick={() => void copyItem(item, item.text ?? "")}>{copiedId === item.id ? <Check size={13} /> : <Copy size={13} />}{copiedId === item.id ? "已复制" : "复制"}</button>{retryControl(item, "重新生成", onRegenerate, !item.turnId || Boolean(turnRunning))}</div>}</div></article>;
         }
         if (["commandExecution", "fileChange", "mcpToolCall", "collabToolCall", "webSearch"].includes(item.type)) {
           return <ToolItem item={item} key={item.id} />;
+        }
+        if (item.type === "turnError") {
+          const previousUser = renderableItems.slice(0, hiddenCount + visibleIndex).reverse().find((entry) => entry.type === "userMessage");
+          const duration = itemDurationMs(item);
+          return <article className={`turn-error-card ${item.retrying ? "retrying" : ""}`} key={item.id}><AlertTriangle size={18} /><div><strong>{item.retrying ? "模型请求暂时失败，正在自动重试" : "这次没有得到模型回复"}{duration !== null && <span className="execution-duration"><Clock3 size={11} />执行 {durationText(duration)}</span>}</strong><p>{item.text || "未知错误"}</p><div><button onClick={() => void copyItem(item, item.text ?? "")}>{copiedId === item.id ? <Check size={13} /> : <Copy size={13} />}{copiedId === item.id ? "已复制" : "复制错误"}</button>{previousUser && retryControl(item, "重试", (_item, providerId) => item.turnId ? onRegenerate(item, providerId) : onResend(previousUser, providerId), !previousUser || Boolean(turnRunning) || Boolean(item.retrying))}</div></div></article>;
         }
         if (item.type === "reasoning") {
           return <div className="reasoning-row summary" key={item.id}>{item.summary?.join(" ")}</div>;
@@ -139,6 +202,7 @@ export function Timeline({ items, streamingItemId, turnRunning, projectPath, onO
         return null;
       })}
       {turnRunning && !streamingItemId && <div className="reasoning-row active"><LoaderCircle size={14} /> 正在处理…</div>}
+      {turnRunning && activeTurnStartedAtMs && <div className="turn-duration-live"><Clock3 size={12} />已执行 {durationText(nowMs - activeTurnStartedAtMs)}</div>}
       {previewImage && <div className="image-lightbox" role="dialog" aria-modal="true" aria-label="图片预览" onClick={() => setPreviewImage(null)}><button className="image-lightbox-close" onClick={() => setPreviewImage(null)} aria-label="关闭图片预览"><X size={22} /></button><img src={previewImage} alt="放大的聊天图片" onClick={(event) => event.stopPropagation()} /></div>}
     </div>
   );

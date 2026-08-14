@@ -29,6 +29,23 @@ node_bin() {
   return 1
 }
 
+docker_bin() {
+  for candidate in \
+    "/usr/bin/docker" \
+    "/usr/local/bin/docker" \
+    "/var/apps/docker/target/bin/docker" \
+    "/var/apps/docker/target/usr/bin/docker" \
+    "/var/packages/docker/target/bin/docker" \
+    "/var/packages/docker/target/usr/bin/docker" \
+    "$(command -v docker 2>/dev/null || true)"; do
+    if [ -x "${candidate}" ]; then
+      echo "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 share_dir() {
   local raw="${TRIM_DATA_SHARE_PATHS:-}"
   raw="${raw%%:*}"
@@ -54,8 +71,11 @@ start_process() {
     return 0
   fi
 
-  local node share data workspace codex_bin bundled_version
+  local node node_dir docker docker_dir share data workspace codex_bin bundled_version
   node="$(node_bin || true)"
+  node_dir="${node%/*}"
+  docker="$(docker_bin || true)"
+  docker_dir="${docker%/*}"
   share="$(share_dir)"
   data="${share}/.codex-system"
   workspace="${share}/projects"
@@ -85,7 +105,15 @@ start_process() {
   bundled_version="$(head -n 1 "${TRIM_APPDEST}/vendor/CODEX_VERSION" 2>/dev/null | tr -d '[:space:]')"
   export CODEX_BUNDLED_VERSION="${bundled_version:-unknown}"
   export HOME="${STATE_DIR}/home"
-  export PATH="${VENDOR_DIR}/codex-path:${PATH:-/usr/bin:/bin}"
+  export CODEX_FNOS_NODE_BIN="${node}"
+  if [ -n "${docker}" ]; then
+    export CODEX_FNOS_DOCKER_BIN="${docker}"
+    export PATH="${node_dir}:${docker_dir}:${VENDOR_DIR}/codex-path:${PATH:-/usr/bin:/bin}"
+    log_msg "Docker CLI detected at ${docker}; socket access remains subject to fnOS permissions"
+  else
+    export PATH="${node_dir}:${VENDOR_DIR}/codex-path:${PATH:-/usr/bin:/bin}"
+    log_msg "Docker CLI not found; install or enable the fnOS Docker service"
+  fi
 
   cd "${APP_DIR}" || return 1
   log_msg "starting web service on ${PORT}; workspace=${workspace}"

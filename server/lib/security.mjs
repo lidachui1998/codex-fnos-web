@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -45,4 +45,10 @@ export function secretHint(value) {
 
 export function createInternalToken() {
   return randomBytes(32).toString("base64url");
+}
+
+export function isInternalAuthorized(value, expected) {
+  const received = Buffer.from(String(value ?? "").replace(/^Bearer\s+/i, ""));
+  const wanted = Buffer.from(String(expected ?? ""));
+  return received.length === wanted.length && timingSafeEqual(received, wanted);
 }

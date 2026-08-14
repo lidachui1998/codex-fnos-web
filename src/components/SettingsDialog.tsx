@@ -1,10 +1,12 @@
-import { CheckCircle2, CloudCog, Download, Image as ImageIcon, KeyRound, LoaderCircle, Network, Palette, Pencil, PlugZap, RefreshCw, ShieldCheck, Trash2, Upload } from "lucide-react";
+import { BellRing, CheckCircle2, Clock3, CloudCog, Download, Gauge, Image as ImageIcon, KeyRound, LoaderCircle, Network, Palette, Pencil, PlugZap, Plus, RefreshCw, ShieldCheck, Trash2, Upload, UserRound } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { reasoningProfileName } from "../reasoning-profile";
-import type { Bootstrap, CodexUpdateState, ProviderProfile, ProxyProfile, ReasoningProfile } from "../types";
+import type { Bootstrap, CodexUpdateState, ProviderProfile, ProxyProfile, RateLimitSnapshot, RateLimitWindow, ReasoningProfile } from "../types";
 import { ModelCombobox } from "./ModelCombobox";
 import { Modal } from "./Modal";
+import { NotificationSettings } from "./NotificationSettings";
+import { PersonalizationSettings } from "./PersonalizationSettings";
 
 type Props = {
   open: boolean;
@@ -53,8 +55,88 @@ const emptyProxy: ProxyForm = {
   noProxy: "127.0.0.1,localhost,::1",
 };
 
+const planNames: Record<string, string> = {
+  free: "Free",
+  go: "Go",
+  plus: "Plus",
+  pro: "Pro",
+  prolite: "Pro Lite",
+  team: "Team",
+  self_serve_business_prolite: "Business Pro Lite",
+  self_serve_business_usage_based: "Business 按量",
+  business: "Business",
+  ent26: "Enterprise",
+  enterprise_cbp_automation: "Enterprise Automation",
+  enterprise_cbp_usage_based: "Enterprise 按量",
+  enterprise: "Enterprise",
+  edu: "Edu",
+  unknown: "未知套餐",
+};
+
+function planName(value?: string | null) {
+  return value ? planNames[value] || value : "套餐未知";
+}
+
+function windowName(window: RateLimitWindow, fallback: string) {
+  const minutes = Number(window.windowDurationMins || 0);
+  if (!minutes) return fallback;
+  if (minutes % 1440 === 0) return `${minutes / 1440} 天额度`;
+  if (minutes % 60 === 0) return `${minutes / 60} 小时额度`;
+  return `${minutes} 分钟额度`;
+}
+
+function resetTime(value?: number | null) {
+  return value ? new Date(value * 1000).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "等待官方返回";
+}
+
+function rateLimitEntries(bootstrap: Bootstrap) {
+  const limits = bootstrap.account?.rateLimits;
+  if (!limits) return [];
+  const entries = Object.entries(limits.rateLimitsByLimitId || {});
+  const root = limits.rateLimits;
+  const rootId = root?.limitId || "legacy";
+  if (root && !entries.some(([limitId, snapshot]) => limitId === rootId || snapshot.limitId === root.limitId)) {
+    entries.push([rootId, root]);
+  }
+  return entries;
+}
+
+function usageSnapshot(bootstrap: Bootstrap): RateLimitSnapshot | null {
+  const limits = bootstrap.account?.rateLimits;
+  if (!limits) return null;
+  if (limits.codexRateLimits) return limits.codexRateLimits;
+  const entries = Object.entries(limits.rateLimitsByLimitId || {});
+  const keyed = entries.find(([limitId]) => limitId.toLowerCase() === "codex")?.[1];
+  if (keyed) return keyed;
+  const identified = entries.find(([, snapshot]) => snapshot.limitId?.toLowerCase() === "codex")?.[1];
+  if (identified) return identified;
+  return limits.rateLimits?.limitId?.toLowerCase() === "codex" ? limits.rateLimits : null;
+}
+
+function exhaustionReason(bootstrap: Bootstrap) {
+  for (const [, snapshot] of rateLimitEntries(bootstrap)) {
+    if (snapshot.rateLimitReachedType) return snapshot.rateLimitReachedType;
+    if (snapshot.spendControlReached) return "spendControlReached";
+    if (snapshot.individualLimit && Number(snapshot.individualLimit.remainingPercent) <= 0) return "individualLimitReached";
+  }
+  return null;
+}
+
+function usageState(snapshot: RateLimitSnapshot, window: RateLimitWindow) {
+  const exhausted = Boolean(
+    snapshot.rateLimitReachedType
+    || snapshot.spendControlReached
+    || (snapshot.individualLimit && Number(snapshot.individualLimit.remainingPercent) <= 0),
+  );
+  if (exhausted) return { usedPercent: 100, label: "已耗尽" };
+  const raw = Number(window.usedPercent);
+  if (!Number.isFinite(raw)) return { usedPercent: null, label: "状态未知" };
+  const usedPercent = Math.min(100, Math.max(0, raw));
+  return { usedPercent, label: `官方已用 ${usedPercent}% · 剩余 ${Math.max(0, 100 - usedPercent)}%` };
+}
+
 export function SettingsDialog({ open, bootstrap, onClose, onChanged }: Props) {
-  const [tab, setTab] = useState<"providers" | "proxies" | "permissions" | "appearance" | "updates" | "account">("providers");
+  const [tab, setTab] = useState<"providers" | "proxies" | "permissions" | "notifications" | "personalization" | "appearance" | "updates" | "account">("providers");
   const [providerForm, setProviderForm] = useState(emptyProvider);
   const [proxyForm, setProxyForm] = useState(emptyProxy);
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
@@ -63,7 +145,7 @@ export function SettingsDialog({ open, bootstrap, onClose, onChanged }: Props) {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [apiKey, setApiKey] = useState("");
-  const [deviceLogin, setDeviceLogin] = useState<{ verificationUrl: string; userCode: string } | null>(null);
+  const [deviceLogin, setDeviceLogin] = useState<{ loginId: string; verificationUrl: string; userCode: string; status: "pending" | "browserCompleted" | "error"; error?: string } | null>(null);
   const [providerModels, setProviderModels] = useState<string[]>([]);
   const [updateInfo, setUpdateInfo] = useState<CodexUpdateState>(bootstrap.codex);
 
@@ -75,6 +157,42 @@ export function SettingsDialog({ open, bootstrap, onClose, onChanged }: Props) {
   }, [open]);
 
   useEffect(() => { setUpdateInfo(bootstrap.codex); }, [bootstrap.codex]);
+
+  useEffect(() => {
+    if (open && tab === "account") void onChanged();
+  }, [onChanged, open, tab]);
+
+  useEffect(() => {
+    if (!open || !deviceLogin || deviceLogin.status === "error") return;
+    let cancelled = false;
+    const startedAt = Date.now();
+    const poll = async () => {
+      try {
+        const result = await api<{ status: "pending" | "success" | "error"; browserCompleted?: boolean; error?: string }>(`/api/account/login/${encodeURIComponent(deviceLogin.loginId)}`);
+        if (cancelled) return;
+        if (result.status === "success") {
+          setNotice("ChatGPT 账户已在 NAS 端验证并连接");
+          setDeviceLogin(null);
+          await onChanged();
+          return;
+        }
+        if (result.status === "error") {
+          setDeviceLogin((current) => current ? { ...current, status: "error", error: result.error || "登录失败" } : current);
+          return;
+        }
+        const nextStatus = result.browserCompleted ? "browserCompleted" : "pending";
+        setDeviceLogin((current) => current && current.status !== nextStatus ? { ...current, status: nextStatus } : current);
+        if (Date.now() - startedAt > 10 * 60_000) {
+          setDeviceLogin((current) => current ? { ...current, status: "error", error: "等待登录超时，请重新生成设备码" } : current);
+        }
+      } catch (reason) {
+        if (!cancelled) setDeviceLogin((current) => current ? { ...current, status: "error", error: reason instanceof Error ? reason.message : "登录状态检查失败" } : current);
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 2_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [open, deviceLogin?.loginId, deviceLogin?.status]);
 
   async function checkCodexUpdate() {
     setBusy("check-update"); setError(""); setNotice("");
@@ -110,6 +228,18 @@ export function SettingsDialog({ open, bootstrap, onClose, onChanged }: Props) {
     } finally {
       setBusy(null);
     }
+  }
+
+  async function changeDefaultProxy(proxyId: string) {
+    setBusy("default-proxy"); setError(""); setNotice("");
+    try {
+      if (proxyId) await api(`/api/proxies/${proxyId}/test`, { method: "POST", body: "{}" });
+      await api("/api/settings", { method: "PATCH", body: JSON.stringify({ defaultProxyId: proxyId || null }) });
+      setNotice(proxyId ? "代理已从 NAS 侧测试通过，Codex 服务正在重载" : "已切换为直连，并清除 Codex 子进程继承的旧代理");
+      await onChanged();
+    } catch (reason) {
+      setError(reason instanceof Error ? `${reason.message}。如果代理运行在电脑上，请开启“允许局域网连接”并放行防火墙端口。` : "代理测试失败");
+    } finally { setBusy(null); }
   }
 
   function editProvider(provider: ProviderProfile) {
@@ -181,6 +311,33 @@ export function SettingsDialog({ open, bootstrap, onClose, onChanged }: Props) {
     });
   }
 
+  function addAccount() {
+    const label = window.prompt("给这个账户写一个备注，方便切换", `账户 ${bootstrap.accounts.length + 1}`);
+    if (label === null) return;
+    setDeviceLogin(null);
+    void perform("account-add", () => api("/api/accounts", {
+      method: "POST",
+      body: JSON.stringify({ label: label.trim() || `账户 ${bootstrap.accounts.length + 1}` }),
+    }), "已创建并切换到新账户，请完成登录");
+  }
+
+  function switchAccount(id: string) {
+    if (id === bootstrap.activeAccountId) return;
+    setDeviceLogin(null);
+    void perform(`account-switch:${id}`, () => api(`/api/accounts/${encodeURIComponent(id)}/switch`, {
+      method: "POST",
+      body: "{}",
+    }), "Codex 账户已切换");
+  }
+
+  function deleteAccount(profile: Bootstrap["accounts"][number]) {
+    if (!window.confirm(`删除账户“${profile.label}”？凭据目录会移入可恢复的隔离区，不会直接擦除。`)) return;
+    setDeviceLogin(null);
+    void perform(`account-delete:${profile.id}`, () => api(`/api/accounts/${encodeURIComponent(profile.id)}`, {
+      method: "DELETE",
+    }), "账户已删除，原凭据目录已移入隔离区");
+  }
+
   return (
     <Modal open={open} onClose={onClose} title="工作台设置" subtitle="模型、代理和账户都保存在这台飞牛设备上。" wide>
       <div className="settings-layout">
@@ -193,6 +350,12 @@ export function SettingsDialog({ open, bootstrap, onClose, onChanged }: Props) {
           </button>
           <button className={tab === "permissions" ? "active" : ""} onClick={() => setTab("permissions")}>
             <ShieldCheck size={17} /> 命令审批
+          </button>
+          <button className={tab === "notifications" ? "active" : ""} onClick={() => setTab("notifications")}>
+            <BellRing size={17} /> 通知设置
+          </button>
+          <button className={tab === "personalization" ? "active" : ""} onClick={() => setTab("personalization")}>
+            <UserRound size={17} /> 个性化指令
           </button>
           <button className={tab === "appearance" ? "active" : ""} onClick={() => setTab("appearance")}>
             <Palette size={17} /> 外观主题
@@ -275,7 +438,8 @@ export function SettingsDialog({ open, bootstrap, onClose, onChanged }: Props) {
           {tab === "proxies" && (
             <div className="settings-section">
               <div className="section-heading"><div><h3>网络代理</h3><p>仅供本 Codex 工作台使用，不会修改飞牛 NAS 或其他应用的系统代理；每个模型供应商还可以独立覆盖。</p></div></div>
-              <label className="default-proxy"><span>应用默认代理</span><select value={bootstrap.settings.defaultProxyId ?? ""} onChange={(event) => perform("default-proxy", () => api("/api/settings", { method: "PATCH", body: JSON.stringify({ defaultProxyId: event.target.value || null }) }), "应用代理已更新，Codex 服务正在重载")}><option value="">直连</option>{bootstrap.proxies.map((proxy) => <option key={proxy.id} value={proxy.id}>{proxy.name}</option>)}</select></label>
+              <label className="default-proxy"><span>应用默认代理</span><select value={bootstrap.settings.defaultProxyId ?? ""} disabled={busy === "default-proxy"} onChange={(event) => void changeDefaultProxy(event.target.value)}><option value="">直连</option>{bootstrap.proxies.map((proxy) => <option key={proxy.id} value={proxy.id}>{proxy.name}</option>)}</select></label>
+              <div className="settings-warning">选择默认代理时会先从 NAS 侧测试连通性；失败的代理不会启用。代理只注入本应用和它启动的 Codex 命令，不会修改 fnOS 系统代理。电脑上的代理必须监听局域网地址（不是仅 127.0.0.1），并放行对应防火墙端口。</div>
               <div className="settings-list">
                 {bootstrap.proxies.map((proxy) => (
                   <article className="settings-row" key={proxy.id}>
@@ -318,7 +482,7 @@ export function SettingsDialog({ open, bootstrap, onClose, onChanged }: Props) {
 
           {tab === "permissions" && (
             <div className="settings-section compact-settings">
-              <div className="section-heading"><h3>新会话默认审批</h3><p>这里只决定新建会话的默认值；已有会话请在聊天顶部单独切换。</p></div>
+              <div className="section-heading"><h3>会话默认权限</h3><p>默认审批用于新会话；联网默认值保存时会同步到已有会话，顶部开关仍可单独覆盖。</p></div>
               <div className="setting-card">
                 <div><ShieldCheck size={20} /><span><strong>新会话默认值</strong><small>每个聊天会独立保存自己的选择，仍然保留 workspace-write 沙箱。</small></span></div>
                 <select value={bootstrap.settings.approvalPolicy} onChange={(event) => void perform("approval-policy", () => api("/api/settings", { method: "PATCH", body: JSON.stringify({ approvalPolicy: event.target.value }) }), event.target.value === "never" ? "新会话将默认自动审批" : "新会话将默认逐次确认")}>
@@ -326,9 +490,21 @@ export function SettingsDialog({ open, bootstrap, onClose, onChanged }: Props) {
                   <option value="never">自动审批（推荐给私人 NAS）</option>
                 </select>
               </div>
+              <div className="setting-card">
+                <div><Network size={20} /><span><strong>默认允许命令联网</strong><small>同步到所有已有聊天；只影响 Codex 命令，不修改 NAS 系统网络设置。</small></span></div>
+                <select value={bootstrap.settings.networkAccess ? "allow" : "deny"} disabled={busy === "network-access-default"} onChange={(event) => void perform("network-access-default", () => api("/api/settings", { method: "PATCH", body: JSON.stringify({ networkAccess: event.target.value === "allow", applyToExistingThreads: true }) }), event.target.value === "allow" ? "所有会话已允许联网" : "所有会话已关闭命令联网")}>
+                  <option value="allow">允许联网（当前默认）</option>
+                  <option value="deny">禁止联网</option>
+                </select>
+              </div>
               <div className="settings-warning">自动审批会减少弹窗，但 Codex 仍可能修改项目文件。会话顶部的设置优先于这里的默认值，切换后只影响当前聊天。</div>
+              <div className="settings-warning">允许联网会让 Git、curl、依赖安装和浏览器抓取直接访问网络或应用代理。请只在可信项目中使用；单个聊天仍可在顶部临时关闭。</div>
             </div>
           )}
+
+          {tab === "personalization" && <PersonalizationSettings settings={bootstrap.settings} onChanged={onChanged} />}
+
+          {tab === "notifications" && <NotificationSettings />}
 
           {tab === "appearance" && (
             <div className="settings-section compact-settings">
@@ -340,7 +516,22 @@ export function SettingsDialog({ open, bootstrap, onClose, onChanged }: Props) {
                 <div><ImageIcon size={20} /><span><strong>自定义背景图片</strong><small>支持 PNG、JPEG、WebP，最大 8 MB。</small></span></div>
                 <div className="setting-actions"><label className="secondary-button"><Upload size={15} /> {bootstrap.appearance.hasBackground ? "更换图片" : "上传图片"}<input className="sr-only" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void uploadBackground(event.target.files?.[0])} /></label>{bootstrap.appearance.hasBackground && <button className="danger-button compact" onClick={() => void perform("delete-background", () => api("/api/appearance/background", { method: "DELETE" }), "背景图片已删除")}><Trash2 size={14} /> 删除</button>}</div>
               </div>
-              {bootstrap.appearance.hasBackground && <><div className="background-preview" style={{ backgroundImage: `url(/api/appearance/background?v=${bootstrap.appearance.updatedAt ?? 0})` }}><span>当前背景预览</span></div><label className="toggle-row"><span>显示背景图片</span><input type="checkbox" checked={bootstrap.settings.backgroundEnabled} onChange={(event) => void perform("background-enabled", () => api("/api/settings", { method: "PATCH", body: JSON.stringify({ backgroundEnabled: event.target.checked }) }), "背景显示设置已更新")} /></label><label className="range-row"><span>背景强度 <em>{Math.round(bootstrap.settings.backgroundOpacity * 100)}%</em></span><input type="range" min="0.05" max="0.85" step="0.05" value={bootstrap.settings.backgroundOpacity} onChange={(event) => void perform("background-opacity", () => api("/api/settings", { method: "PATCH", body: JSON.stringify({ backgroundOpacity: Number(event.target.value) }) }), "背景强度已更新")} /></label></>}
+              {bootstrap.appearance.hasBackground && <>
+                <div className="background-preview" style={{
+                  backgroundImage: `url(/api/appearance/background?v=${bootstrap.appearance.updatedAt ?? 0})`,
+                  backgroundPosition: bootstrap.settings.backgroundPosition,
+                  backgroundSize: bootstrap.settings.backgroundFit === "stretch" ? "100% 100%" : bootstrap.settings.backgroundFit === "tile" ? "auto" : bootstrap.settings.backgroundFit,
+                  backgroundRepeat: bootstrap.settings.backgroundFit === "tile" ? "repeat" : "no-repeat",
+                }}><span>当前背景预览</span></div>
+                <label className="toggle-row"><span>显示背景图片</span><input type="checkbox" checked={bootstrap.settings.backgroundEnabled} onChange={(event) => void perform("background-enabled", () => api("/api/settings", { method: "PATCH", body: JSON.stringify({ backgroundEnabled: event.target.checked }) }), "背景显示设置已更新")} /></label>
+                <div className="background-options">
+                  <label><span>图片适配</span><select value={bootstrap.settings.backgroundFit} onChange={(event) => void perform("background-fit", () => api("/api/settings", { method: "PATCH", body: JSON.stringify({ backgroundFit: event.target.value }) }), "背景适配已更新")}><option value="cover">填满屏幕（裁切）</option><option value="contain">完整显示（留白）</option><option value="stretch">拉伸到屏幕</option><option value="tile">原图平铺</option></select></label>
+                  <label><span>图片位置</span><select value={bootstrap.settings.backgroundPosition} onChange={(event) => void perform("background-position", () => api("/api/settings", { method: "PATCH", body: JSON.stringify({ backgroundPosition: event.target.value }) }), "背景位置已更新")}><option value="center">居中</option><option value="top">顶部</option><option value="bottom">底部</option></select></label>
+                </div>
+                <label className="range-row"><span>背景强度 <em>{Math.round(bootstrap.settings.backgroundOpacity * 100)}%</em></span><input type="range" min="0.05" max="0.85" step="0.05" value={bootstrap.settings.backgroundOpacity} onChange={(event) => void perform("background-opacity", () => api("/api/settings", { method: "PATCH", body: JSON.stringify({ backgroundOpacity: Number(event.target.value) }) }), "背景强度已更新")} /></label>
+                <label className="range-row"><span>背景模糊 <em>{bootstrap.settings.backgroundBlur}px</em></span><input type="range" min="0" max="16" step="1" value={bootstrap.settings.backgroundBlur} onChange={(event) => void perform("background-blur", () => api("/api/settings", { method: "PATCH", body: JSON.stringify({ backgroundBlur: Number(event.target.value) }) }), "背景模糊已更新")} /></label>
+                <label className="range-row"><span>内容面板不透明度 <em>{Math.round(bootstrap.settings.backgroundPanelOpacity * 100)}%</em></span><input type="range" min="0.35" max="0.95" step="0.05" value={bootstrap.settings.backgroundPanelOpacity} onChange={(event) => void perform("background-panel", () => api("/api/settings", { method: "PATCH", body: JSON.stringify({ backgroundPanelOpacity: Number(event.target.value) }) }), "内容面板透明度已更新")} /></label>
+              </>}
             </div>
           )}
 
@@ -356,21 +547,70 @@ export function SettingsDialog({ open, bootstrap, onClose, onChanged }: Props) {
 
           {tab === "account" && (
             <div className="settings-section account-section">
+              <div className="account-profiles-heading">
+                <div><h3>已保存的账户</h3><p>每个账户使用独立的 Codex 凭据、会话和插件目录；切换时 Codex 服务会短暂重启。</p></div>
+                <button className="secondary-button compact" disabled={Boolean(busy)} onClick={addAccount}><Plus size={14} /> 添加账户</button>
+              </div>
+              <div className="account-profiles">
+                {bootstrap.accounts.map((profile) => {
+                  const authenticated = profile.active ? Boolean(bootstrap.account?.account) : profile.authenticated;
+                  return <article className={`account-profile ${profile.active ? "active" : ""}`} key={profile.id}>
+                    <span className="account-profile-mark">{(authenticated ? profile.email?.slice(0, 1) : null)?.toUpperCase() || profile.label.slice(0, 1).toUpperCase()}</span>
+                    <span><strong>{profile.label}</strong><small>{authenticated ? profile.email || profile.accountType : "尚未登录"}</small><em>{authenticated ? planName(profile.planType) : "等待连接"}</em></span>
+                    <span className="account-profile-actions">
+                      {profile.active
+                        ? <i><CheckCircle2 size={13} /> 当前</i>
+                        : <button className="mini-button" disabled={Boolean(busy)} onClick={() => switchAccount(profile.id)}>{busy === `account-switch:${profile.id}` ? "切换中…" : "切换"}</button>}
+                      {profile.homeKey !== "legacy" && <button className="icon-button small danger" title="删除账户" disabled={Boolean(busy)} onClick={() => deleteAccount(profile)}><Trash2 size={13} /></button>}
+                    </span>
+                  </article>;
+                })}
+              </div>
               <div className="account-card">
                 <div className="provider-avatar openai">O</div>
-                <div><h3>{bootstrap.account?.account?.email || "官方 OpenAI / ChatGPT（可选）"}</h3><p>{bootstrap.account?.account ? `${bootstrap.account.account.type} · ${bootstrap.account.account.planType || "账户已连接"}` : "只有使用官方模型时才需要；第三方供应商无需在这里登录。"}</p></div>
+                <div><h3>{bootstrap.account?.account?.email || bootstrap.account?.activeProfile?.label || "官方 OpenAI / ChatGPT（可选）"}</h3><p>{bootstrap.account?.account ? `${bootstrap.account.account.type} · ${planName(bootstrap.account.account.planType || bootstrap.account?.rateLimits?.rateLimits.planType)}` : "当前账户槽位尚未登录；第三方供应商无需在这里连接。"}</p></div>
               </div>
+              {bootstrap.account?.rateLimits && <div className="account-usage">
+                <header><span><Gauge size={16} /><strong>Codex 用量（来自官方 app-server）</strong></span><button className="mini-button" disabled={busy === "usage-refresh"} onClick={() => void perform("usage-refresh", () => api("/api/account?refresh=1"), "账户用量已刷新")}>{busy === "usage-refresh" ? "刷新中…" : "刷新"}</button></header>
+                {[usageSnapshot(bootstrap)?.primary, usageSnapshot(bootstrap)?.secondary].map((window, index) => {
+                  const snapshot = usageSnapshot(bootstrap);
+                  if (!window || !snapshot) return null;
+                  const state = usageState(snapshot, window);
+                  return <div className="usage-window" key={index}>
+                    <div><strong>{windowName(window, index === 0 ? "主额度" : "次额度")}</strong><span>{state.label}</span></div>
+                    <div className="usage-track"><i style={{ width: `${state.usedPercent ?? 0}%` }} /></div>
+                    <small><Clock3 size={12} /> {resetTime(window.resetsAt)} 重置{state.usedPercent === null ? " · 官方未返回可用百分比" : ""}</small>
+                  </div>;
+                })}
+                {!usageSnapshot(bootstrap) && <div className="settings-warning">官方本次没有返回 `limitId=codex` 的额度桶，因此无法可靠计算 Codex 剩余用量。已停止使用其他 30 天额度桶冒充 Codex 用量。</div>}
+                {exhaustionReason(bootstrap) && <div className="settings-error">官方返回额度限制状态：{exhaustionReason(bootstrap)}</div>}
+                <details className="usage-diagnostics">
+                  <summary>查看官方返回的额度桶</summary>
+                  {rateLimitEntries(bootstrap).length === 0 && <p>没有返回任何额度桶。</p>}
+                  {rateLimitEntries(bootstrap).map(([limitId, snapshot]) => <div key={limitId}>
+                    <strong>{snapshot.limitName || limitId}</strong>
+                    <span>limitId: {snapshot.limitId || limitId}</span>
+                    {[snapshot.primary, snapshot.secondary].map((window, index) => window && <span key={index}>{windowName(window, index === 0 ? "主额度" : "次额度")}：已用 {Number.isFinite(Number(window.usedPercent)) ? `${window.usedPercent}%` : "未知"}，{resetTime(window.resetsAt)} 重置</span>)}
+                    {snapshot.rateLimitReachedType && <span>限制状态：{snapshot.rateLimitReachedType}</span>}
+                  </div>)}
+                </details>
+              </div>}
+              {bootstrap.account?.rateLimitsError && <div className="settings-warning">套餐已识别，但本次用量刷新失败：{bootstrap.account.rateLimitsError}</div>}
+              {bootstrap.account?.account?.type === "apiKey" && <div className="account-note">当前使用 API Key 按量计费，官方不会返回 ChatGPT 套餐剩余百分比或套餐重置时间。</div>}
               {!bootstrap.account?.account && <>
                 <div className="account-note">如果设备码返回 403，通常是当前 NAS 网络被官方接口拒绝。请配置可用的应用默认代理，或者直接使用 OpenAI API Key。</div>
                 <button className="secondary-button" onClick={async () => {
                   setBusy("device-login"); setError("");
-                  try { setDeviceLogin(await api<{ verificationUrl: string; userCode: string }>("/api/account/login", { method: "POST", body: JSON.stringify({ type: "device" }) })); } catch (reason) { setError(reason instanceof Error ? reason.message : "登录启动失败"); } finally { setBusy(null); }
+                  try {
+                    const result = await api<{ loginId: string; verificationUrl: string; userCode: string }>("/api/account/login", { method: "POST", body: JSON.stringify({ type: "device" }) });
+                    setDeviceLogin({ ...result, status: "pending" });
+                  } catch (reason) { setError(reason instanceof Error ? reason.message : "登录启动失败"); } finally { setBusy(null); }
                 }}>{busy === "device-login" ? "正在生成设备码…" : "使用 ChatGPT 设备码登录"}</button>
-                {deviceLogin && <div className="device-code"><span>在另一窗口打开</span><a href={deviceLogin.verificationUrl} target="_blank" rel="noreferrer">{deviceLogin.verificationUrl}</a><strong>{deviceLogin.userCode}</strong></div>}
+                {deviceLogin && <div className={`device-code ${deviceLogin.status}`}><span>在另一窗口打开</span><a href={deviceLogin.verificationUrl} target="_blank" rel="noreferrer">{deviceLogin.verificationUrl}</a><strong>{deviceLogin.userCode}</strong><small>{deviceLogin.status === "pending" ? "正在等待网页授权…" : deviceLogin.status === "browserCompleted" ? "网页授权完成，正在确认 NAS 凭据…" : deviceLogin.error}</small>{deviceLogin.status === "error" && <button className="mini-button" onClick={() => setDeviceLogin(null)}>重新生成设备码</button>}</div>}
                 <div className="divider"><span>或者</span></div>
                 <form className="inline-key-form" onSubmit={(event) => { event.preventDefault(); perform("api-login", () => api("/api/account/login", { method: "POST", body: JSON.stringify({ type: "apiKey", apiKey }) }), "API Key 已连接").then((saved) => { if (saved) setApiKey(""); }); }}><input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="OpenAI API Key" /><button className="secondary-button" disabled={!apiKey || busy === "api-login"}>连接</button></form>
               </>}
-              {bootstrap.account?.account && <button className="danger-button" onClick={() => perform("logout", () => api("/api/account/logout", { method: "POST", body: "{}" }), "OpenAI 账户已退出")}>退出 OpenAI 账户</button>}
+              {bootstrap.account?.account && <button className="danger-button" onClick={() => perform("logout", () => api("/api/account/logout", { method: "POST", body: "{}" }), "当前 OpenAI 账户已退出；其他已保存账户不受影响")}>退出当前账户</button>}
             </div>
           )}
         </section>

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, extname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
@@ -8,6 +8,16 @@ const execFileAsync = promisify(execFile);
 const maxTextFileBytes = 1_500_000;
 const maxImageFileBytes = 12 * 1024 * 1024;
 const hiddenDirectories = new Set([".git", ".codex-system", ".fnos-build", "node_modules", ".pnpm-store"]);
+const artifactExtensions = new Map([
+  [".html", ["html", "text/html; charset=utf-8"]], [".htm", ["html", "text/html; charset=utf-8"]],
+  [".pdf", ["document", "application/pdf"]], [".docx", ["document", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]],
+  [".xlsx", ["document", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]], [".pptx", ["document", "application/vnd.openxmlformats-officedocument.presentationml.presentation"]],
+  [".png", ["image", "image/png"]], [".jpg", ["image", "image/jpeg"]], [".jpeg", ["image", "image/jpeg"]], [".webp", ["image", "image/webp"]], [".gif", ["image", "image/gif"]], [".svg", ["image", "image/svg+xml"]],
+  [".mp4", ["video", "video/mp4"]], [".webm", ["video", "video/webm"]], [".mov", ["video", "video/quicktime"]],
+  [".mp3", ["audio", "audio/mpeg"]], [".wav", ["audio", "audio/wav"]], [".m4a", ["audio", "audio/mp4"]],
+  [".zip", ["archive", "application/zip"]], [".gz", ["archive", "application/gzip"]], [".7z", ["archive", "application/x-7z-compressed"]],
+  [".fpk", ["package", "application/octet-stream"]], [".apk", ["package", "application/vnd.android.package-archive"]],
+]);
 
 function imageType(buffer) {
   if (buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
@@ -94,6 +104,75 @@ async function git(root, args) {
 }
 
 export class WorkspaceService {
+  search(project, value = "", requestedLimit = 20) {
+    const root = projectRoot(project);
+    const needle = String(value || "").trim().toLowerCase();
+    const limit = Math.min(50, Math.max(1, Number(requestedLimit) || 20));
+    const pending = [root];
+    const visitedDirectories = new Set();
+    const matches = [];
+    let visitedEntries = 0;
+    const maxEntries = 4_000;
+
+    while (pending.length > 0 && visitedEntries < maxEntries) {
+      const directory = pending.shift();
+      let resolvedDirectory;
+      let entries;
+      try {
+        resolvedDirectory = realpathSync(directory);
+        if (!isInside(root, resolvedDirectory) || visitedDirectories.has(resolvedDirectory)) continue;
+        visitedDirectories.add(resolvedDirectory);
+        entries = readdirSync(resolvedDirectory, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        if (visitedEntries >= maxEntries) break;
+        visitedEntries += 1;
+        if (hiddenDirectories.has(entry.name)) continue;
+        try {
+          const target = realpathSync(resolve(resolvedDirectory, entry.name));
+          if (!isInside(root, target)) continue;
+          const stats = statSync(target);
+          if (stats.isDirectory()) {
+            pending.push(target);
+            const path = relativePath(root, target);
+            const normalizedPath = path.toLowerCase();
+            const normalizedName = entry.name.toLowerCase();
+            if (!needle || normalizedPath.includes(needle)) {
+              const score = !needle ? 3
+                : normalizedName === needle ? 0
+                  : normalizedName.startsWith(needle) ? 1
+                    : normalizedName.includes(needle) ? 2 : 3;
+              matches.push({ name: entry.name, path, type: "directory", size: null, score });
+            }
+            continue;
+          }
+          if (!stats.isFile()) continue;
+          const path = relativePath(root, target);
+          const normalizedPath = path.toLowerCase();
+          const normalizedName = entry.name.toLowerCase();
+          if (needle && !normalizedPath.includes(needle)) continue;
+          const score = !needle ? 3
+            : normalizedName === needle ? 0
+              : normalizedName.startsWith(needle) ? 1
+                : normalizedName.includes(needle) ? 2 : 3;
+          matches.push({ name: entry.name, path, type: "file", size: stats.size, score });
+        } catch {
+          // Files can disappear while a NAS directory is being scanned.
+        }
+      }
+    }
+
+    matches.sort((left, right) => left.score - right.score
+      || left.path.length - right.path.length
+      || left.path.localeCompare(right.path, "zh-CN"));
+    return {
+      data: matches.slice(0, limit).map(({ score: _score, ...file }) => file),
+      truncated: matches.length > limit || visitedEntries >= maxEntries,
+    };
+  }
+
   list(project, value = "") {
     const { root, target } = resolveExistingProjectPath(project, value);
     if (!statSync(target).isDirectory()) throw Object.assign(new Error("目标不是目录"), { status: 400 });
@@ -150,6 +229,71 @@ export class WorkspaceService {
       mimeType: "text/plain",
       content: content.toString("utf8"),
     };
+  }
+
+  download(project, value) {
+    const { root, target } = resolveExistingProjectPath(project, value);
+    const stats = statSync(target);
+    if (!stats.isFile()) throw Object.assign(new Error("目标不是文件"), { status: 400 });
+    return { path: relativePath(root, target), target, name: basename(target), size: stats.size };
+  }
+
+  view(project, value) {
+    const file = this.download(project, value);
+    const artifact = artifactExtensions.get(extname(file.name).toLowerCase());
+    return { ...file, mimeType: artifact?.[1] ?? "application/octet-stream", kind: artifact?.[0] ?? "file" };
+  }
+
+  artifacts(project, requestedLimit = 120) {
+    const root = projectRoot(project);
+    const limit = Math.min(250, Math.max(1, Number(requestedLimit) || 120));
+    const pending = [root];
+    const visitedDirectories = new Set();
+    const artifacts = [];
+    let visitedEntries = 0;
+    const maxEntries = 8_000;
+    while (pending.length > 0 && visitedEntries < maxEntries) {
+      const directory = pending.shift();
+      let resolvedDirectory;
+      let entries;
+      try {
+        resolvedDirectory = realpathSync(directory);
+        if (!isInside(root, resolvedDirectory) || visitedDirectories.has(resolvedDirectory)) continue;
+        visitedDirectories.add(resolvedDirectory);
+        entries = readdirSync(resolvedDirectory, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        if (visitedEntries >= maxEntries) break;
+        visitedEntries += 1;
+        if (hiddenDirectories.has(entry.name)) continue;
+        try {
+          const target = realpathSync(resolve(resolvedDirectory, entry.name));
+          if (!isInside(root, target)) continue;
+          const stats = statSync(target);
+          if (stats.isDirectory()) {
+            pending.push(target);
+            continue;
+          }
+          if (!stats.isFile()) continue;
+          const artifact = artifactExtensions.get(extname(entry.name).toLowerCase());
+          if (!artifact) continue;
+          artifacts.push({
+            name: entry.name,
+            path: relativePath(root, target),
+            size: stats.size,
+            modifiedAt: Math.floor(stats.mtimeMs),
+            kind: artifact[0],
+            mimeType: artifact[1],
+          });
+        } catch {
+          // NAS files can change during a scan.
+        }
+      }
+    }
+    artifacts.sort((left, right) => right.modifiedAt - left.modifiedAt || left.path.localeCompare(right.path, "zh-CN"));
+    return { data: artifacts.slice(0, limit), truncated: artifacts.length > limit || visitedEntries >= maxEntries };
   }
 
   async changes(project) {

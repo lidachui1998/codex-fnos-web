@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { openDatabase } from "../database.mjs";
+import { defaultFnosInstructions } from "../instructions.mjs";
 import { Stores } from "../stores.mjs";
 
 function withStores(run) {
@@ -47,6 +48,36 @@ test("deleting the global proxy clears its settings reference", () => {
   });
 });
 
+test("Codex account profiles keep independent homes and active metadata", () => {
+  withStores(({ stores }) => {
+    assert.deepEqual(stores.listCodexAccounts().map(({ id, label, homeKey, active }) => ({ id, label, homeKey, active })), [
+      { id: "primary", label: "主账户", homeKey: "legacy", active: true },
+    ]);
+    const added = stores.createCodexAccount({ label: "备用账户" });
+    assert.equal(added.active, true);
+    assert.notEqual(added.homeKey, "legacy");
+    stores.updateCodexAccountMetadata(added.id, { type: "chatgpt", email: "second@example.com", planType: "plus" });
+    const active = stores.getActiveCodexAccount();
+    assert.deepEqual({
+      label: active.label,
+      accountType: active.accountType,
+      email: active.email,
+      planType: active.planType,
+      authenticated: active.authenticated,
+      active: active.active,
+    }, {
+      label: "备用账户",
+      accountType: "chatgpt",
+      email: "second@example.com",
+      planType: "plus",
+      authenticated: true,
+      active: true,
+    });
+    assert.equal(stores.activateCodexAccount("primary").id, "primary");
+    assert.equal(stores.listCodexAccounts().find((item) => item.id === added.id)?.active, false);
+  });
+});
+
 test("directory browser stays inside configured workspace roots", () => {
   withStores(({ root, workspace, stores }) => {
     const result = stores.browseDirectories(workspace);
@@ -72,14 +103,22 @@ test("removing a project only forgets it and preserves its directory", () => {
 
 test("appearance and approval settings are normalized", () => {
   withStores(({ stores }) => {
-    stores.saveSettings({ approvalPolicy: "never", theme: "dark", backgroundEnabled: false, backgroundOpacity: 0.85 });
+    stores.saveSettings({ approvalPolicy: "never", theme: "dark", backgroundEnabled: false, backgroundOpacity: 0.85, backgroundFit: "contain", backgroundPosition: "top", backgroundBlur: 8, backgroundPanelOpacity: 0.9 });
     assert.deepEqual(stores.getSettings(), {
       defaultProxyId: null,
       workspaceRoots: stores.workspaceRoots,
       approvalPolicy: "never",
+      networkAccess: true,
       theme: "dark",
       backgroundEnabled: false,
       backgroundOpacity: 0.85,
+      backgroundFit: "contain",
+      backgroundPosition: "top",
+      backgroundBlur: 8,
+      backgroundPanelOpacity: 0.9,
+      fnosInstructionsEnabled: true,
+      fnosInstructions: defaultFnosInstructions,
+      personalInstructions: "",
     });
   });
 });
@@ -96,6 +135,17 @@ test("approval policy is persisted independently for each thread", () => {
   });
 });
 
+test("network access is persisted independently for each thread", () => {
+  withStores(({ stores }) => {
+    stores.saveThreadApprovalPolicy("thread-a", "never");
+    stores.saveThreadNetworkAccess("thread-a", true);
+    stores.saveThreadNetworkAccess("thread-b", false);
+    assert.equal(stores.getThreadPreferences("thread-a").networkAccess, true);
+    assert.equal(stores.getThreadPreferences("thread-a").approvalPolicy, "never");
+    assert.equal(stores.getThreadPreferences("thread-b").networkAccess, false);
+  });
+});
+
 test("thread names and pins persist without overwriting approval preferences", () => {
   withStores(({ stores }) => {
     stores.saveThreadApprovalPolicy("thread-a", "never");
@@ -106,6 +156,9 @@ test("thread names and pins persist without overwriting approval preferences", (
       name: "重要会话",
       pinned: true,
       deleted: false,
+      networkAccess: true,
+      projectId: null,
+      archivedLocal: false,
       updatedAt: stores.getThreadPreferences("thread-a").updatedAt,
     });
   });
@@ -122,8 +175,25 @@ test("deleted threads keep an independent hidden marker", () => {
       name: "Old chat",
       pinned: false,
       deleted: true,
+      networkAccess: true,
+      projectId: null,
+      archivedLocal: false,
       updatedAt: stores.getThreadPreferences("thread-deleted").updatedAt,
     });
+  });
+});
+
+test("archiving one thread keeps other thread preferences unchanged", () => {
+  withStores(({ stores }) => {
+    stores.saveThreadDisplayName("thread-a", "A");
+    stores.saveThreadDisplayName("thread-b", "B");
+    stores.saveThreadArchived("thread-a", true);
+
+    assert.equal(stores.getThreadPreferences("thread-a").archivedLocal, true);
+    assert.equal(stores.getThreadPreferences("thread-b").archivedLocal, false);
+
+    stores.saveThreadArchived("thread-a", false);
+    assert.equal(stores.getThreadPreferences("thread-a").archivedLocal, false);
   });
 });
 

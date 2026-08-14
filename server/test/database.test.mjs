@@ -48,3 +48,90 @@ test("migrates legacy single-url proxies and provider assignments", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("migrates existing scheduled tasks to the safe workspace sandbox", () => {
+  const root = mkdtempSync(join(tmpdir(), "codex-fnos-schedule-migration-"));
+  const path = join(root, "legacy.sqlite");
+  const legacy = new DatabaseSync(path);
+  legacy.exec(`
+    CREATE TABLE scheduled_tasks (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      schedule_json TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      network_access INTEGER NOT NULL DEFAULT 0,
+      model TEXT,
+      reasoning_effort TEXT,
+      source_automation_id TEXT,
+      source_cwd TEXT,
+      source_prompt TEXT,
+      memory_text TEXT,
+      compatibility_json TEXT NOT NULL DEFAULT '[]',
+      next_run_at INTEGER,
+      last_run_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    INSERT INTO scheduled_tasks (
+      id, name, project_id, prompt, schedule_json, enabled, network_access,
+      compatibility_json, created_at, updated_at
+    ) VALUES (
+      'schedule-1', 'Legacy schedule', 'project-1', 'Run it',
+      '{"type":"daily","time":"09:00"}', 1, 1, '[]', 1, 1
+    );
+  `);
+  legacy.close();
+
+  const migrated = openDatabase(path);
+  try {
+    assert.equal(
+      migrated.prepare("SELECT sandbox_mode FROM scheduled_tasks WHERE id = 'schedule-1'").get().sandbox_mode,
+      "workspace",
+    );
+  } finally {
+    migrated.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("enables network access once for existing chats without overriding later choices", () => {
+  const root = mkdtempSync(join(tmpdir(), "codex-fnos-network-migration-"));
+  const path = join(root, "legacy.sqlite");
+  const legacy = new DatabaseSync(path);
+  legacy.exec(`
+    CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE thread_preferences (
+      thread_id TEXT PRIMARY KEY,
+      approval_policy TEXT NOT NULL,
+      display_name TEXT,
+      pinned INTEGER NOT NULL DEFAULT 0,
+      deleted INTEGER NOT NULL DEFAULT 0,
+      archived_local INTEGER NOT NULL DEFAULT 0,
+      network_access INTEGER NOT NULL DEFAULT 0,
+      project_id TEXT,
+      updated_at INTEGER NOT NULL
+    );
+    INSERT INTO settings VALUES ('network_access_default', 'false');
+    INSERT INTO thread_preferences (thread_id, approval_policy, network_access, updated_at)
+      VALUES ('thread-1', 'on-request', 0, 1);
+  `);
+  legacy.close();
+
+  let migrated = openDatabase(path);
+  assert.equal(migrated.prepare("SELECT value FROM settings WHERE key = 'network_access_default'").get().value, "true");
+  assert.equal(migrated.prepare("SELECT network_access FROM thread_preferences WHERE thread_id = 'thread-1'").get().network_access, 1);
+  migrated.prepare("UPDATE settings SET value = 'false' WHERE key = 'network_access_default'").run();
+  migrated.prepare("UPDATE thread_preferences SET network_access = 0 WHERE thread_id = 'thread-1'").run();
+  migrated.close();
+
+  migrated = openDatabase(path);
+  try {
+    assert.equal(migrated.prepare("SELECT value FROM settings WHERE key = 'network_access_default'").get().value, "false");
+    assert.equal(migrated.prepare("SELECT network_access FROM thread_preferences WHERE thread_id = 'thread-1'").get().network_access, 0);
+  } finally {
+    migrated.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

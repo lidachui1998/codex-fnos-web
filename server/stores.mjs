@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { accessSync, constants, existsSync, mkdirSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import { defaultFnosInstructions } from "./instructions.mjs";
 import { decryptSecret, encryptSecret, secretHint } from "./lib/security.mjs";
 
 const now = () => Math.floor(Date.now() / 1000);
@@ -174,9 +175,17 @@ export class Stores {
       defaultProxyId: values.default_proxy_id || null,
       workspaceRoots: [...this.workspaceRoots],
       approvalPolicy: values.approval_policy === "never" ? "never" : "on-request",
+      networkAccess: values.network_access_default !== "false",
       theme: ["system", "light", "dark", "ink"].includes(values.theme) ? values.theme : "system",
       backgroundEnabled: values.background_enabled !== "false",
       backgroundOpacity: Math.min(0.85, Math.max(0.05, Number(values.background_opacity) || 0.35)),
+      backgroundFit: ["cover", "contain", "stretch", "tile"].includes(values.background_fit) ? values.background_fit : "cover",
+      backgroundPosition: ["center", "top", "bottom"].includes(values.background_position) ? values.background_position : "center",
+      backgroundBlur: Math.min(16, Math.max(0, Number(values.background_blur) || 0)),
+      backgroundPanelOpacity: Math.min(0.95, Math.max(0.35, Number(values.background_panel_opacity) || 0.76)),
+      fnosInstructionsEnabled: values.fnos_instructions_enabled !== "false",
+      fnosInstructions: values.fnos_instructions || defaultFnosInstructions,
+      personalInstructions: values.personal_instructions || "",
     };
   }
 
@@ -193,6 +202,14 @@ export class Stores {
       if (!["on-request", "never"].includes(input.approvalPolicy)) throw new Error("命令审批方式无效");
       this.#saveSetting("approval_policy", input.approvalPolicy);
     }
+    if ("networkAccess" in input) {
+      const networkAccess = Boolean(input.networkAccess);
+      this.#saveSetting("network_access_default", networkAccess ? "true" : "false");
+      if (input.applyToExistingThreads) {
+        this.db.prepare("UPDATE thread_preferences SET network_access = ?, updated_at = ?")
+          .run(networkAccess ? 1 : 0, now());
+      }
+    }
     if ("theme" in input) {
       if (!["system", "light", "dark", "ink"].includes(input.theme)) throw new Error("主题设置无效");
       this.#saveSetting("theme", input.theme);
@@ -203,7 +220,111 @@ export class Stores {
       if (!Number.isFinite(opacity) || opacity < 0.05 || opacity > 0.85) throw new Error("背景强度必须在 5% 到 85% 之间");
       this.#saveSetting("background_opacity", String(opacity));
     }
+    if ("backgroundFit" in input) {
+      if (!["cover", "contain", "stretch", "tile"].includes(input.backgroundFit)) throw new Error("背景适配方式无效");
+      this.#saveSetting("background_fit", input.backgroundFit);
+    }
+    if ("backgroundPosition" in input) {
+      if (!["center", "top", "bottom"].includes(input.backgroundPosition)) throw new Error("背景位置无效");
+      this.#saveSetting("background_position", input.backgroundPosition);
+    }
+    if ("backgroundBlur" in input) {
+      const blur = Number(input.backgroundBlur);
+      if (!Number.isFinite(blur) || blur < 0 || blur > 16) throw new Error("背景模糊必须在 0 到 16 之间");
+      this.#saveSetting("background_blur", String(blur));
+    }
+    if ("backgroundPanelOpacity" in input) {
+      const opacity = Number(input.backgroundPanelOpacity);
+      if (!Number.isFinite(opacity) || opacity < 0.35 || opacity > 0.95) throw new Error("内容面板不透明度必须在 35% 到 95% 之间");
+      this.#saveSetting("background_panel_opacity", String(opacity));
+    }
+    if ("fnosInstructionsEnabled" in input) this.#saveSetting("fnos_instructions_enabled", input.fnosInstructionsEnabled ? "true" : "false");
+    if ("fnosInstructions" in input) {
+      const instructions = String(input.fnosInstructions || "").trim();
+      if (instructions.length > 12_000) throw new Error("飞牛环境指令不能超过 12000 个字符");
+      this.#saveSetting("fnos_instructions", instructions);
+    }
+    if ("personalInstructions" in input) {
+      const instructions = String(input.personalInstructions || "").trim();
+      if (instructions.length > 12_000) throw new Error("个人指令不能超过 12000 个字符");
+      this.#saveSetting("personal_instructions", instructions);
+    }
     return this.getSettings();
+  }
+
+  ensureCodexAccount() {
+    const timestamp = now();
+    if (!this.db.prepare("SELECT 1 FROM codex_accounts LIMIT 1").get()) {
+      this.db.prepare(`
+        INSERT INTO codex_accounts (id, label, home_key, created_at, updated_at, last_used_at)
+        VALUES ('primary', '主账户', 'legacy', ?, ?, ?)
+      `).run(timestamp, timestamp, timestamp);
+    }
+    let activeId = this.db.prepare("SELECT value FROM settings WHERE key = 'active_codex_account_id'").get()?.value;
+    let active = activeId ? this.db.prepare("SELECT * FROM codex_accounts WHERE id = ?").get(activeId) : null;
+    if (!active) {
+      active = this.db.prepare("SELECT * FROM codex_accounts ORDER BY last_used_at DESC, created_at ASC LIMIT 1").get();
+      activeId = active.id;
+      this.#saveSetting("active_codex_account_id", activeId);
+    }
+    return this.#publicCodexAccount(active, activeId);
+  }
+
+  listCodexAccounts() {
+    const activeId = this.ensureCodexAccount().id;
+    return this.db.prepare("SELECT * FROM codex_accounts ORDER BY last_used_at DESC, created_at ASC").all()
+      .map((row) => this.#publicCodexAccount(row, activeId));
+  }
+
+  getActiveCodexAccount() {
+    const activeId = this.ensureCodexAccount().id;
+    return this.#publicCodexAccount(this.db.prepare("SELECT * FROM codex_accounts WHERE id = ?").get(activeId), activeId);
+  }
+
+  createCodexAccount(input = {}) {
+    const id = randomUUID();
+    const label = String(input.label || "新账户").trim().slice(0, 80) || "新账户";
+    const timestamp = now();
+    this.db.prepare(`
+      INSERT INTO codex_accounts (id, label, home_key, created_at, updated_at, last_used_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(id, label, id, timestamp, timestamp, timestamp);
+    this.#saveSetting("active_codex_account_id", id);
+    return this.getActiveCodexAccount();
+  }
+
+  activateCodexAccount(id) {
+    const row = this.db.prepare("SELECT * FROM codex_accounts WHERE id = ?").get(String(id));
+    if (!row) throw Object.assign(new Error("Codex 账户不存在"), { status: 404 });
+    const timestamp = now();
+    this.db.prepare("UPDATE codex_accounts SET last_used_at = ?, updated_at = ? WHERE id = ?")
+      .run(timestamp, timestamp, row.id);
+    this.#saveSetting("active_codex_account_id", row.id);
+    return this.getActiveCodexAccount();
+  }
+
+  updateCodexAccountMetadata(id, account) {
+    const row = this.db.prepare("SELECT * FROM codex_accounts WHERE id = ?").get(String(id));
+    if (!row) return null;
+    const accountType = account?.type ? String(account.type) : null;
+    const email = account?.email ? String(account.email).slice(0, 320) : null;
+    const planType = account?.planType ? String(account.planType).slice(0, 80) : null;
+    const label = row.label === "新账户" && email ? email : row.label;
+    this.db.prepare(`
+      UPDATE codex_accounts SET label = ?, account_type = ?, email = ?, plan_type = ?, updated_at = ? WHERE id = ?
+    `).run(label, accountType, email, planType, now(), row.id);
+    return this.listCodexAccounts().find((item) => item.id === row.id) ?? null;
+  }
+
+  clearCodexAccountMetadata(id) {
+    this.db.prepare(`
+      UPDATE codex_accounts SET account_type = NULL, email = NULL, plan_type = NULL, updated_at = ? WHERE id = ?
+    `).run(now(), String(id));
+    return this.listCodexAccounts().find((item) => item.id === String(id)) ?? null;
+  }
+
+  deleteCodexAccount(id) {
+    return this.db.prepare("DELETE FROM codex_accounts WHERE id = ?").run(String(id)).changes > 0;
   }
 
   listWorkspaceCandidates() {
@@ -230,6 +351,22 @@ export class Stores {
     `).run(key, String(value));
   }
 
+  #publicCodexAccount(row, activeId) {
+    return {
+      id: row.id,
+      label: row.label,
+      homeKey: row.home_key,
+      accountType: row.account_type,
+      email: row.email,
+      planType: row.plan_type,
+      authenticated: Boolean(row.account_type),
+      active: row.id === activeId,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      lastUsedAt: row.last_used_at,
+    };
+  }
+
   getThreadApprovalPolicy(threadId) {
     return this.db.prepare("SELECT approval_policy FROM thread_preferences WHERE thread_id = ?").get(threadId)?.approval_policy ?? null;
   }
@@ -241,6 +378,9 @@ export class Stores {
       name: row.display_name || null,
       pinned: Boolean(row.pinned),
       deleted: Boolean(row.deleted),
+      archivedLocal: Boolean(row.archived_local),
+      networkAccess: Boolean(row.network_access),
+      projectId: row.project_id || null,
       updatedAt: row.updated_at,
     } : null;
   }
@@ -252,6 +392,28 @@ export class Stores {
       ON CONFLICT(thread_id) DO UPDATE SET approval_policy = excluded.approval_policy, updated_at = excluded.updated_at
     `).run(String(threadId), approvalPolicy, now());
     return approvalPolicy;
+  }
+
+  saveThreadNetworkAccess(threadId, networkAccess) {
+    const value = networkAccess ? 1 : 0;
+    this.db.prepare(`
+      INSERT INTO thread_preferences (thread_id, approval_policy, network_access, updated_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(thread_id) DO UPDATE SET network_access = excluded.network_access, updated_at = excluded.updated_at
+    `).run(String(threadId), this.getSettings().approvalPolicy, value, now());
+    return Boolean(value);
+  }
+
+  saveThreadProjectId(threadId, projectId) {
+    const value = projectId || null;
+    this.db.prepare(`
+      INSERT INTO thread_preferences (thread_id, approval_policy, project_id, updated_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(thread_id) DO UPDATE SET project_id = excluded.project_id, updated_at = excluded.updated_at
+    `).run(String(threadId), this.getSettings().approvalPolicy, value, now());
+    if (value) {
+      this.db.prepare("UPDATE notifications SET project_id = ? WHERE thread_id = ?")
+        .run(value, String(threadId));
+    }
+    return value;
   }
 
   saveThreadDisplayName(threadId, displayName) {
@@ -274,11 +436,21 @@ export class Stores {
     return Boolean(value);
   }
 
+  saveThreadArchived(threadId, archived) {
+    const value = archived ? 1 : 0;
+    this.db.prepare(`
+      INSERT INTO thread_preferences (thread_id, approval_policy, archived_local, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(thread_id) DO UPDATE SET archived_local = excluded.archived_local, pinned = 0, updated_at = excluded.updated_at
+    `).run(String(threadId), this.getSettings().approvalPolicy, value, now());
+    return Boolean(value);
+  }
+
   saveThreadDeleted(threadId) {
     this.db.prepare(`
       INSERT INTO thread_preferences (thread_id, approval_policy, deleted, updated_at)
       VALUES (?, ?, 1, ?)
-      ON CONFLICT(thread_id) DO UPDATE SET deleted = 1, pinned = 0, updated_at = excluded.updated_at
+      ON CONFLICT(thread_id) DO UPDATE SET deleted = 1, pinned = 0, archived_local = 0, updated_at = excluded.updated_at
     `).run(String(threadId), this.getSettings().approvalPolicy, now());
     return true;
   }

@@ -143,7 +143,7 @@ export function ModelPicker({ bootstrap, open, providerId, model, effort, thread
             {effortOptions.length > 0 && <label><span>思考程度 · {reasoningProfileName(reasoningProfile)}</span><select value={draftEffort} onChange={(event) => setDraftEffort(event.target.value as ReasoningEffort | "")}><option value="">跟随模型默认</option>{effortOptions.map((item) => <option key={item.value} value={item.value}>{item.label}（{item.value}）</option>)}</select><small>{draftEffort ? effortOptions.find((item) => item.value === draftEffort)?.description : "不同供应商和模型只显示它实际支持的档位。"}</small></label>}
             {effortOptions.length === 0 && <div className="model-note">当前模型没有可配置的思考程度，将使用供应商默认行为。</div>}
             {draftProviderId && <button type="button" className="refresh-models" onClick={() => setRefreshKey((current) => current + 1)} disabled={loading}><RefreshCw size={13} className={loading ? "spin" : ""} /> 从供应商 /models 重新获取</button>}
-            {providerWillChange && <div className="model-note">供应商与当前会话不同，发送消息时会自动创建一个新会话；只更换同一供应商的模型则会继续当前会话。</div>}
+            {providerWillChange && <div className="model-note">供应商与当前会话不同：普通发送会创建新会话；在历史回复旁点“重新生成”可明确选择该供应商，并留在当前会话。</div>}
             <button className="primary-button apply-model" disabled={!draftModel.trim() && Boolean(draftProviderId)} onClick={async () => { await onSelect(draftProviderId, draftModel.trim(), draftEffort); onOpenChange(false); }}><Check size={16} /> 使用这个模型</button>
 
             <form className="quick-token" onSubmit={(event) => { event.preventDefault(); void saveToken(); }}>

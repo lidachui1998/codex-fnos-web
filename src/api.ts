@@ -10,11 +10,12 @@ export class ApiError extends Error {
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const isBinaryBody = init.body instanceof Blob || init.body instanceof ArrayBuffer || ArrayBuffer.isView(init.body);
   const response = await fetch(path, {
     ...init,
     credentials: "same-origin",
     headers: {
-      ...(init.body ? { "content-type": "application/json" } : {}),
+      ...(init.body && !isBinaryBody && !(init.body instanceof FormData) ? { "content-type": "application/json" } : {}),
       ...init.headers,
     },
   });

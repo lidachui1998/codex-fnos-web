@@ -1,26 +1,30 @@
-import { timingSafeEqual } from "node:crypto";
 import { readJson, sendError, sendJson } from "./lib/http.mjs";
+import { isInternalAuthorized } from "./lib/security.mjs";
 import { responsesToChat, streamChatAsResponses, translateChatResponse } from "./chat-adapter.mjs";
 import { forwardResponses, requestChatCompletions } from "./provider-client.mjs";
-
-function authorized(value, expected) {
-  const received = Buffer.from(String(value ?? "").replace(/^Bearer\s+/i, ""));
-  const wanted = Buffer.from(expected);
-  return received.length === wanted.length && timingSafeEqual(received, wanted);
-}
+import { decodeProviderRoute } from "./provider-routing.mjs";
 
 export async function handleProviderGateway(req, res, stores, token, providerId) {
-  if (!authorized(req.headers.authorization, token)) {
+  if (!isInternalAuthorized(req.headers.authorization, token)) {
     sendError(res, 401, "内部供应商网关认证失败");
     return;
   }
-  const provider = stores.getProviderSecret(providerId);
+  let provider = stores.getProviderSecret(providerId);
   if (!provider || !provider.enabled) {
     sendError(res, 404, "供应商不存在或已停用");
     return;
   }
+  let body = await readJson(req, 10 * 1024 * 1024);
+  const routed = decodeProviderRoute(body.model);
+  if (routed) {
+    provider = stores.getProviderSecret(routed.providerId);
+    if (!provider || !provider.enabled) {
+      sendError(res, 404, "重试所选供应商不存在或已停用");
+      return;
+    }
+    body = { ...body, model: routed.model };
+  }
   const proxy = stores.getEffectiveProxy(provider);
-  const body = await readJson(req, 10 * 1024 * 1024);
 
   if (provider.protocol === "responses") {
     const upstream = await forwardResponses(provider, proxy, body, req.headers);

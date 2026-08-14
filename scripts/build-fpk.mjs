@@ -124,7 +124,24 @@ await build({
   format: "esm",
   target: "node24",
   sourcemap: false,
-  minify: false,
+  minifyIdentifiers: false,
+  minifySyntax: true,
+  minifyWhitespace: true,
+  legalComments: "none",
+  banner: { js: "import { createRequire as __codexCreateRequire } from 'node:module'; const require = __codexCreateRequire(import.meta.url);" },
+});
+await build({
+  entryPoints: [join(root, "server", "schedule-mcp.mjs")],
+  outfile: join(serverDir, "server", "schedule-mcp.mjs"),
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  target: "node24",
+  sourcemap: false,
+  minifyIdentifiers: false,
+  minifySyntax: true,
+  minifyWhitespace: true,
+  legalComments: "none",
   banner: { js: "import { createRequire as __codexCreateRequire } from 'node:module'; const require = __codexCreateRequire(import.meta.url);" },
 });
 

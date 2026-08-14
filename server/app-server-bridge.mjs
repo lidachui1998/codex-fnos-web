@@ -1,8 +1,9 @@
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { delimiter, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 function tomlString(value) {
   return JSON.stringify(String(value));
@@ -12,21 +13,65 @@ function providerKey(id) {
   return `fnos-${id}`;
 }
 
+const managedConfigStart = "# BEGIN CODEX FNOS WEB MANAGED";
+const managedConfigEnd = "# END CODEX FNOS WEB MANAGED";
+
+export function preserveUnmanagedConfig(source) {
+  const lines = String(source || "").split(/\r?\n/);
+  const preserved = [];
+  let inManagedBlock = false;
+  let inManagedProvider = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed === managedConfigStart) {
+      inManagedBlock = true;
+      continue;
+    }
+    if (trimmed === managedConfigEnd) {
+      inManagedBlock = false;
+      continue;
+    }
+    if (inManagedBlock) continue;
+    if (/^\[model_providers\.fnos-[^\]]+\]$/.test(trimmed)) {
+      inManagedProvider = true;
+      continue;
+    }
+    if (inManagedProvider && /^\[/.test(trimmed)) inManagedProvider = false;
+    if (inManagedProvider) continue;
+    if (/^(model_provider|approval_policy|sandbox_mode|experimental_use_unified_exec_tool|background_terminal_max_timeout)\s*=/.test(trimmed)) continue;
+    preserved.push(line);
+  }
+  return preserved.join("\n").trim();
+}
+
 export function modelProviderKey(id) {
   return id ? providerKey(id) : "openai";
 }
 
+export function codexRuntimeConfig(modelReasoningEffort) {
+  return {
+    "agents.enabled": true,
+    "agents.max_concurrent_threads_per_session": 4,
+    experimental_use_unified_exec_tool: true,
+    background_terminal_max_timeout: 3_600_000,
+    ...(modelReasoningEffort ? { model_reasoning_effort: modelReasoningEffort } : {}),
+  };
+}
+
 export class AppServerBridge extends EventEmitter {
-  constructor({ codexBin, codexHome, gatewayBaseUrl, gatewayToken, stores }) {
+  constructor({ codexBin, codexHome, databasePath, gatewayBaseUrl, gatewayToken, stores }) {
     super();
     this.codexBin = codexBin;
     this.codexHome = codexHome;
+    this.databasePath = databasePath;
     this.gatewayBaseUrl = gatewayBaseUrl;
     this.gatewayToken = gatewayToken;
     this.stores = stores;
     this.child = null;
     this.nextId = 1;
     this.pending = new Map();
+    this.loginAttempts = new Map();
+    this.activeTurns = new Set();
     this.state = { status: "stopped", error: null, pid: null };
     this.startPromise = null;
   }
@@ -35,8 +80,27 @@ export class AppServerBridge extends EventEmitter {
     return { ...this.state };
   }
 
+  hasActiveTurns() {
+    return this.activeTurns.size > 0;
+  }
+
+  trackLogin(loginId) {
+    if (!loginId) return;
+    this.loginAttempts.set(String(loginId), { status: "pending", error: null, updatedAt: Date.now() });
+  }
+
+  loginStatus(loginId) {
+    return this.loginAttempts.get(String(loginId)) ?? null;
+  }
+
   setCodexBin(codexBin) {
     this.codexBin = codexBin;
+  }
+
+  setCodexHome(codexHome) {
+    if (this.child) throw new Error("切换 Codex 账户前必须先停止 app-server");
+    this.codexHome = resolve(codexHome);
+    this.loginAttempts.clear();
   }
 
   async start() {
@@ -57,7 +121,7 @@ export class AppServerBridge extends EventEmitter {
       const child = spawn(this.codexBin, ["app-server", "--listen", "stdio://"], {
         cwd: this.codexHome,
         env: {
-          ...process.env,
+          ...this.#cleanProcessEnvironment(),
           ...this.#proxyEnvironment(),
           CODEX_HOME: this.codexHome,
           FNOS_GATEWAY_TOKEN: this.gatewayToken,
@@ -87,7 +151,7 @@ export class AppServerBridge extends EventEmitter {
         this.#consumeOutput(child);
         try {
           await this.request("initialize", {
-            clientInfo: { name: "codex-fnos-web", title: "Codex fnOS Web", version: "0.5.0" },
+            clientInfo: { name: "codex-fnos-web", title: "Codex fnOS Web", version: "0.9.5" },
             capabilities: { experimentalApi: true },
           }, { requireReady: false });
           this.notify("initialized", {});
@@ -100,6 +164,7 @@ export class AppServerBridge extends EventEmitter {
       });
       child.once("exit", (code, signal) => {
         this.child = null;
+        this.activeTurns.clear();
         for (const { reject: rejectPending } of this.pending.values()) {
           rejectPending(new Error("Codex app-server 已退出"));
         }
@@ -138,7 +203,8 @@ export class AppServerBridge extends EventEmitter {
       return Promise.reject(new Error("Codex app-server 尚未就绪"));
     }
     const id = this.nextId++;
-    this.child.stdin.write(`${JSON.stringify({ id, method, params })}\n`);
+    const message = params === undefined ? { id, method } : { id, method, params };
+    this.child.stdin.write(`${JSON.stringify(message)}\n`);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
@@ -195,6 +261,25 @@ export class AppServerBridge extends EventEmitter {
         this.emit("event", { kind: "server_request", request: message });
         return;
       }
+      if (message.method === "account/login/completed" && message.params?.loginId) {
+        this.loginAttempts.set(String(message.params.loginId), {
+          status: message.params.success ? "success" : "error",
+          error: message.params.error || null,
+          updatedAt: Date.now(),
+        });
+      }
+      if (message.method === "turn/started" && message.params?.threadId && message.params?.turn?.id) {
+        this.activeTurns.add(`${message.params.threadId}:${message.params.turn.id}`);
+      }
+      if (message.method === "turn/completed" && message.params?.threadId && message.params?.turn?.id) {
+        this.activeTurns.delete(`${message.params.threadId}:${message.params.turn.id}`);
+      }
+      if (message.method === "error" && !message.params?.willRetry && message.params?.threadId) {
+        const prefix = `${message.params.threadId}:`;
+        for (const key of this.activeTurns) {
+          if (key.startsWith(prefix)) this.activeTurns.delete(key);
+        }
+      }
       if (message.method) this.emit("event", { kind: "notification", ...message });
     });
     child.stderr.on("data", (chunk) => {
@@ -205,10 +290,15 @@ export class AppServerBridge extends EventEmitter {
 
   #writeConfig() {
     mkdirSync(this.codexHome, { recursive: true });
+    const configPath = join(this.codexHome, "config.toml");
+    const unmanaged = preserveUnmanagedConfig(existsSync(configPath) ? readFileSync(configPath, "utf8") : "");
     const lines = [
+      managedConfigStart,
       "model_provider = \"openai\"",
       `approval_policy = ${tomlString(this.stores.getSettings().approvalPolicy)}`,
       "sandbox_mode = \"workspace-write\"",
+      "experimental_use_unified_exec_tool = true",
+      "background_terminal_max_timeout = 3600000",
       "",
     ];
     for (const provider of this.stores.listProviders().filter((item) => item.enabled)) {
@@ -225,7 +315,34 @@ export class AppServerBridge extends EventEmitter {
         "",
       );
     }
-    writeFileSync(join(this.codexHome, "config.toml"), `${lines.join("\n")}\n`, { mode: 0o600 });
+    lines.push(
+      "[mcp_servers.fnos_schedule]",
+      `command = ${tomlString(process.execPath)}`,
+      `args = [${tomlString(join(dirname(fileURLToPath(import.meta.url)), "schedule-mcp.mjs"))}]`,
+      "startup_timeout_sec = 10",
+      "",
+      "[mcp_servers.fnos_schedule.tools.create_scheduled_task]",
+      "approval_mode = \"approve\"",
+      "",
+      "[mcp_servers.fnos_schedule.tools.create_new_conversation]",
+      "approval_mode = \"approve\"",
+      "",
+      "[mcp_servers.fnos_schedule.tools.create_global_skill]",
+      "approval_mode = \"approve\"",
+      "",
+      "[mcp_servers.fnos_schedule.tools.create_global_plugin]",
+      "approval_mode = \"approve\"",
+      "",
+      "[mcp_servers.fnos_schedule.env]",
+      `FNOS_SCHEDULE_DB = ${tomlString(this.databasePath)}`,
+      `FNOS_CODEX_HOME = ${tomlString(this.codexHome)}`,
+      `FNOS_GATEWAY_BASE_URL = ${tomlString(this.gatewayBaseUrl)}`,
+      `FNOS_GATEWAY_TOKEN = ${tomlString(this.gatewayToken)}`,
+      "",
+    );
+    lines.push(managedConfigEnd);
+    const content = [lines.join("\n"), unmanaged].filter(Boolean).join("\n\n");
+    writeFileSync(configPath, `${content}\n`, { mode: 0o600 });
   }
 
   #proxyEnvironment() {
@@ -248,6 +365,20 @@ export class AppServerBridge extends EventEmitter {
       env.ALL_PROXY = proxy.socks5_url;
       env.all_proxy = proxy.socks5_url;
     }
+    return env;
+  }
+
+  #cleanProcessEnvironment() {
+    const env = { ...process.env };
+    for (const key of ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"]) {
+      delete env[key];
+    }
+    const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path") || "PATH";
+    const runtimeDirectory = dirname(process.execPath);
+    const currentPath = String(env[pathKey] || "");
+    const entries = currentPath.split(delimiter).filter(Boolean);
+    env[pathKey] = [runtimeDirectory, ...entries.filter((entry) => resolve(entry) !== resolve(runtimeDirectory))].join(delimiter);
+    env.CODEX_FNOS_NODE_BIN = process.execPath;
     return env;
   }
 

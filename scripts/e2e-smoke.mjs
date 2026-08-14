@@ -13,7 +13,7 @@ const nodeBin = process.execPath;
 const codexBin = process.env.CODEX_BIN;
 if (!codexBin) throw new Error("CODEX_BIN is required for the app-server smoke test");
 const assistantText = "第三方 API 链路正常\n\n**Markdown 已生效**\n\n- 模型切换\n- 附件输入\n- [打开 src/index.js](src/index.js:1)\n\n```js\nconsole.log('fnOS');\n```";
-const streamDelayMs = process.env.E2E_SERVE_UI === "1" ? 2_500 : 50;
+const streamDelayMs = process.env.E2E_SERVE_UI === "1" ? 2_500 : 400;
 const testImagePng = await readFile(join(rootDir, "assets", "app-icon.png"));
 const testImageDataUrl = `data:image/png;base64,${testImagePng.toString("base64")}`;
 
@@ -58,6 +58,11 @@ function createMockProvider(modelRequests) {
     }
     if (req.url === "/v1/chat/completions") {
       modelRequests.push(body.model);
+      if (JSON.stringify(body.messages ?? []).includes("__force_error__")) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "E2E 上游拒绝了这次模型请求", type: "invalid_request_error", code: "e2e_forced_error" } }));
+        return;
+      }
       if (!body.stream) {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({
@@ -117,14 +122,19 @@ async function waitForBridge(baseUrl, cookie, timeoutMs = 45_000) {
 }
 
 async function request(baseUrl, cookie, path, init = {}) {
-  const response = await fetch(`${baseUrl}${path}`, {
-    ...init,
-    headers: {
-      cookie,
-      ...(init.body ? { "content-type": "application/json" } : {}),
-      ...init.headers,
-    },
-  });
+  let response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      ...init,
+      headers: {
+        cookie,
+        ...(init.body ? { "content-type": "application/json" } : {}),
+        ...init.headers,
+      },
+    });
+  } catch (error) {
+    throw new Error(`${path}: ${error.message}`, { cause: error });
+  }
   const body = await response.json();
   if (!response.ok) throw new Error(`${path}: ${response.status} ${JSON.stringify(body)}`);
   return body;
@@ -164,14 +174,17 @@ async function collectUntilTurnCompleted(baseUrl, cookie, threadId, action) {
   }).catch((error) => {
     if (!controller.signal.aborted) rejectCompleted(error);
   });
-  await delay(100);
-  await action();
-  await Promise.race([
-    completed,
-    delay(30_000).then(() => { throw new Error("Timed out waiting for turn/completed"); }),
-  ]);
-  controller.abort();
-  await readerTask.catch(() => {});
+  try {
+    await delay(100);
+    await action(events);
+    await Promise.race([
+      completed,
+      delay(30_000).then(() => { throw new Error("Timed out waiting for turn/completed"); }),
+    ]);
+  } finally {
+    controller.abort();
+    await readerTask.catch(() => {});
+  }
   return events;
 }
 
@@ -312,6 +325,17 @@ try {
     }),
   });
   assert.equal(providerResult.provider.proxyMode, "direct");
+  const alternateProviderResult = await request(appBaseUrl, cookie, "/api/providers", {
+    method: "POST",
+    body: JSON.stringify({
+      name: "Selected Retry Provider",
+      protocol: "chat_completions",
+      baseUrl: `http://127.0.0.1:${mockPort}/v1`,
+      model: "mock-model-02",
+      apiKey: "retry-selected-key",
+      proxyMode: "direct",
+    }),
+  });
   await delay(800);
   await waitForBridge(appBaseUrl, cookie);
   const modelList = await request(appBaseUrl, cookie, `/api/models?providerId=${providerResult.provider.id}`);
@@ -339,6 +363,10 @@ try {
   assert.equal(projectFile.content, "export const hello = 'fnOS';\n");
   const absoluteProjectFile = await request(appBaseUrl, cookie, `/api/projects/${projectResult.project.id}/file?path=${encodeURIComponent(`${join(projectResult.project.path, "src", "index.js")}:1`)}`);
   assert.equal(absoluteProjectFile.path, "src/index.js");
+  const projectFileDownload = await fetch(`${appBaseUrl}/api/projects/${projectResult.project.id}/file/download?path=${encodeURIComponent("src/index.js:1")}`, { headers: { cookie } });
+  assert.equal(projectFileDownload.status, 200);
+  assert.match(projectFileDownload.headers.get("content-disposition") || "", /attachment;.*index\.js/);
+  assert.equal(await projectFileDownload.text(), "export const hello = 'fnOS';\n");
   const listedSkills = await request(appBaseUrl, cookie, `/api/projects/${projectResult.project.id}/skills?reload=1`);
   const e2eSkill = listedSkills.skills.find((skill) => skill.name === "e2e-review");
   assert.ok(e2eSkill?.enabled, JSON.stringify(listedSkills));
@@ -354,21 +382,28 @@ try {
     await writeFile(join(projectResult.project.path, "src", "index.js"), "export const hello = 'fnOS';\nexport const changed = true;\n", "utf8");
   }
 
-  await request(appBaseUrl, cookie, "/api/settings", {
+  const appearanceSettings = await request(appBaseUrl, cookie, "/api/settings", {
     method: "PATCH",
-    body: JSON.stringify({ approvalPolicy: "never", theme: "dark", backgroundEnabled: true, backgroundOpacity: 0.25 }),
+    body: JSON.stringify({ approvalPolicy: "never", theme: "dark", backgroundEnabled: true, backgroundOpacity: 0.25, backgroundFit: "contain", backgroundPosition: "top", backgroundBlur: 4, backgroundPanelOpacity: 0.85 }),
   });
+  assert.deepEqual({
+    fit: appearanceSettings.settings.backgroundFit,
+    position: appearanceSettings.settings.backgroundPosition,
+    blur: appearanceSettings.settings.backgroundBlur,
+    panel: appearanceSettings.settings.backgroundPanelOpacity,
+  }, { fit: "contain", position: "top", blur: 4, panel: 0.85 });
   await delay(800);
   await waitForBridge(appBaseUrl, cookie);
   const threadResult = await request(appBaseUrl, cookie, "/api/threads", {
     method: "POST",
-    body: JSON.stringify({ projectId: projectResult.project.id, approvalPolicy: "never" }),
+    body: JSON.stringify({ projectId: projectResult.project.id, approvalPolicy: "never", networkAccess: true }),
   });
   assert.equal(threadResult.approvalPolicy, "never");
+  assert.equal(threadResult.networkAccess, true);
   const threadId = threadResult.thread.id;
   await request(appBaseUrl, cookie, `/api/threads/${threadId}/settings`, {
     method: "PATCH",
-    body: JSON.stringify({ model: "mock-coder-fast", effort: "high", approvalPolicy: "on-request" }),
+    body: JSON.stringify({ model: "mock-coder-fast", effort: "high", approvalPolicy: "on-request", networkAccess: true }),
   });
   const events = await collectUntilTurnCompleted(appBaseUrl, cookie, threadId, () => request(appBaseUrl, cookie, `/api/threads/${threadId}/turns`, {
     method: "POST",
@@ -388,11 +423,65 @@ try {
   assert.equal(resumedThread.model, "mock-coder-fast");
   assert.equal(resumedThread.reasoningEffort, "high");
   assert.equal(resumedThread.approvalPolicy, "on-request");
+  assert.equal(resumedThread.networkAccess, true);
+  let steeredTurnId = "";
+  let steerResult;
+  const steerEvents = await collectUntilTurnCompleted(appBaseUrl, cookie, threadId, async (activeEvents) => {
+    const started = await request(appBaseUrl, cookie, `/api/threads/${threadId}/turns`, {
+      method: "POST",
+      body: JSON.stringify({ text: "start a response that will be steered", projectId: projectResult.project.id, approvalPolicy: "on-request" }),
+    });
+    steeredTurnId = started.turn.id;
+    for (let attempt = 0; attempt < 100 && !activeEvents.some((event) => event.method === "turn/started" && event.params?.turn?.id === steeredTurnId); attempt += 1) {
+      await delay(20);
+    }
+    assert.ok(activeEvents.some((event) => event.method === "turn/started" && event.params?.turn?.id === steeredTurnId), "active turn must be announced before steering");
+    steerResult = await request(appBaseUrl, cookie, `/api/threads/${threadId}/steer`, {
+      method: "POST",
+      body: JSON.stringify({ text: "focus the current response on the next step", projectId: projectResult.project.id, expectedTurnId: steeredTurnId }),
+    });
+  });
+  assert.equal(steerResult.turnId, steeredTurnId, "turn/steer must append to the active turn rather than start another turn");
+  assert.equal(steerEvents.find((event) => event.method === "turn/completed")?.params?.turn?.id, steeredTurnId);
+  const steeredThread = await request(appBaseUrl, cookie, `/api/threads/${threadId}`);
+  const steeredInput = steeredThread.thread.turns.find((turn) => turn.id === steeredTurnId)?.items
+    .filter((item) => item.type === "userMessage")
+    .flatMap((item) => item.content ?? [])
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n") ?? "";
+  assert.match(steeredInput, /focus the current response on the next step/);
+  const switchedProvider = await request(appBaseUrl, cookie, `/api/threads/${threadId}/provider`, {
+    method: "POST",
+    body: JSON.stringify({ providerId: alternateProviderResult.provider.id, model: "mock-model-02" }),
+  });
+  assert.equal(switchedProvider.thread.id, threadId, "retry provider switching must preserve the current chat");
+  assert.equal(switchedProvider.modelProvider, `fnos-${alternateProviderResult.provider.id}`);
+  assert.equal(switchedProvider.model, "mock-model-02");
+  const retryEvents = await collectUntilTurnCompleted(appBaseUrl, cookie, threadId, () => request(appBaseUrl, cookie, `/api/threads/${threadId}/turns`, {
+    method: "POST",
+    body: JSON.stringify({ text: "retry with selected provider", projectId: projectResult.project.id, approvalPolicy: "on-request" }),
+  }));
+  assert.equal(retryEvents.find((event) => event.method === "turn/completed")?.params?.threadId, threadId);
+  assert.equal(modelRequests.at(-1), "mock-model-02", "the retry gateway must route to the explicitly selected provider model");
+  const retryRoutedModel = modelRequests.at(-1);
   const metadata = await request(appBaseUrl, cookie, `/api/threads/${threadId}`, {
     method: "PATCH",
     body: JSON.stringify({ name: "E2E pinned chat", pinned: true }),
   });
   assert.deepEqual(metadata.thread, { id: threadId, name: "E2E pinned chat", pinned: true });
+  const failureThreadResult = await request(appBaseUrl, cookie, "/api/threads", {
+    method: "POST",
+    body: JSON.stringify({ projectId: projectResult.project.id, model: "mock-coder-fast", approvalPolicy: "never" }),
+  });
+  const failureThreadId = failureThreadResult.thread.id;
+  const failureEvents = await collectUntilTurnCompleted(appBaseUrl, cookie, failureThreadId, () => request(appBaseUrl, cookie, `/api/threads/${failureThreadId}/turns`, {
+    method: "POST",
+    body: JSON.stringify({ text: "__force_error__", projectId: projectResult.project.id, approvalPolicy: "never" }),
+  }));
+  const failedTurn = failureEvents.find((event) => event.method === "turn/completed")?.params?.turn;
+  assert.equal(failedTurn?.status, "failed", "upstream model failures must complete as a failed turn");
+  assert.ok(failureEvents.some((event) => event.method === "error"), "upstream model failures must emit a visible error notification");
   await delay(1200);
   const persistedThreads = await request(appBaseUrl, cookie, `/api/threads?cwd=${encodeURIComponent(projectResult.project.path)}`);
   const allPersistedThreads = await request(appBaseUrl, cookie, "/api/threads");
@@ -423,6 +512,7 @@ try {
   });
   await request(appBaseUrl, cookie, `/api/projects/${removable.project.id}`, { method: "DELETE" });
   assert.equal((await stat(removablePath)).isDirectory(), true, "removing project must preserve the NAS directory");
+  if (process.env.E2E_SERVE_UI !== "1") await request(appBaseUrl, cookie, `/api/threads/${failureThreadId}`, { method: "DELETE" });
 
   await stopApp(app);
   app = startApp();
@@ -440,9 +530,10 @@ try {
   const restartedThreads = await request(appBaseUrl, restartedCookie, `/api/threads?cwd=${encodeURIComponent(projectResult.project.path)}`);
   assert.ok(restartedThreads.data.some((thread) => thread.id === threadId), "thread must remain visible after an app restart");
   const restartedResume = await request(appBaseUrl, restartedCookie, `/api/threads/${threadId}/resume`, { method: "POST", body: "{}" });
-  assert.equal(restartedResume.model, "mock-coder-fast", "selected model must survive an app restart");
+  assert.equal(restartedResume.model, "mock-model-02", "explicitly selected retry provider model must survive an app restart");
   assert.equal(restartedResume.reasoningEffort, "high", "reasoning effort must survive an app restart");
   assert.equal(restartedResume.approvalPolicy, "on-request", "per-thread approval policy must survive an app restart");
+  assert.equal(restartedResume.networkAccess, true, "per-thread network access must survive an app restart");
   let threadDelete = false;
   if (process.env.E2E_SERVE_UI !== "1") {
     const sourceTurnId = restartedResume.thread.turns?.[0]?.id;
@@ -469,18 +560,24 @@ try {
     combinedProxy: true,
     providerProxyMode: providerResult.provider.proxyMode,
     providerTest: true,
-    switchedModel: modelRequests.at(-1),
+    turnSteer: true,
+    retryProviderSwitchKeepsThread: true,
+    switchedModel: retryRoutedModel,
     reasoningEffort: resumedThread.reasoningEffort,
     approvalPolicy: resumedThread.approvalPolicy,
+    networkAccess: resumedThread.networkAccess,
     skills: true,
     workspaceLinks: true,
     attachmentInput: true,
     imageHistory: true,
     backgroundImage: true,
+    backgroundModes: true,
     workspaceFiles: true,
+    fileDownload: true,
     threadId,
     streamedText: agentText,
     eventCount: events.length,
+    visibleTurnErrors: true,
     persistedHistory: true,
     historyAfterRestart: true,
     threadManagement: true,
