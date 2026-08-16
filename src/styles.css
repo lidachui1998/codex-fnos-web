@@ -234,7 +234,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .subagent-detail > button small { grid-column: 2; color: var(--muted); font-size: 7.5px; }
 .subagent-detail > button > svg { color: var(--faint); }
 .subagent-state { padding: 3px 5px; border-radius: 99px; background: var(--panel); color: var(--muted); font-size: 7px; }
-.subagent-state.running, .subagent-state.pendingInit, .subagent-state.inProgress { background: var(--accent-soft); color: var(--accent-dark); }
+.subagent-state.running, .subagent-state.pendingInit, .subagent-state.inProgress, .subagent-state.waitingApproval, .subagent-state.waitingInput { background: var(--accent-soft); color: var(--accent-dark); }
 .subagent-state.completed { background: color-mix(in srgb,var(--green) 12%,var(--paper)); color: var(--green); }
 .subagent-state.errored, .subagent-state.failed { background: color-mix(in srgb,var(--red) 10%,var(--paper)); color: var(--red); }
 .subagent-detail footer { color: var(--faint); font-size: 7.5px; }
@@ -256,6 +256,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .subagent-live-panel > div > button:hover:not(:disabled) { background: var(--surface-hover); }
 .subagent-live-panel > div > button:disabled { cursor: default; }
 .subagent-live-panel i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb,var(--accent) 12%,transparent); }
+.subagent-live-panel i.waitingApproval, .subagent-live-panel i.waitingInput { background: #c17a19; box-shadow: 0 0 0 3px color-mix(in srgb,#c17a19 14%,transparent); }
 .subagent-live-panel i.completed, .subagent-live-panel i.shutdown { background: var(--green); box-shadow: none; }
 .subagent-live-panel i.errored, .subagent-live-panel i.failed, .subagent-live-panel i.interrupted, .subagent-live-panel i.notFound { background: var(--red); box-shadow: none; }
 .subagent-live-panel > div strong { min-width: 0; overflow: hidden; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
@@ -762,27 +763,43 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .inspector-list > button { width: 100%; min-height: 46px; display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 8px; padding: 7px 8px; border: 0; border-radius: 8px; background: transparent; cursor: pointer; text-align: left; }
 .inspector-list > button:hover { background: var(--panel); }
 
-.subagent-panel { min-width: 0; min-height: 0; display: grid; grid-template-rows: 68px auto minmax(0,1fr); height: 100%; overflow: hidden; border-left: 1px solid var(--line); background: var(--paper); }
+.subagent-panel { min-width: 0; min-height: 0; display: grid; grid-template-rows: 68px minmax(72px,auto) auto minmax(0,1fr); height: 100%; overflow: hidden; border-left: 1px solid var(--line); background: var(--paper); }
 .subagent-panel > header { min-width: 0; display: grid; grid-template-columns: 34px minmax(0,1fr) auto; align-items: center; gap: 9px; padding: 0 10px 0 13px; border-bottom: 1px solid var(--line); }
 .subagent-panel > header > span { min-width: 0; }
 .subagent-panel > header strong, .subagent-panel > header small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.subagent-panel > header strong { font-size: 11px; }
-.subagent-panel > header small { margin-top: 3px; color: var(--muted); font-size: 8px; }
+.subagent-panel > header strong { font-size: 13px; }
+.subagent-panel > header small { margin-top: 3px; color: var(--muted); font-size: 10px; }
 .subagent-panel-mark { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 10px; background: var(--success-bg); color: var(--green); }
 .subagent-panel-mark.running, .subagent-panel-mark.pendingInit, .subagent-panel-mark.inProgress { background: var(--accent-soft); color: var(--accent-dark); }
 .subagent-panel-mark.running svg, .subagent-panel-mark.pendingInit svg, .subagent-panel-mark.inProgress svg { animation: spin 1.2s linear infinite; }
 .subagent-panel-mark.failed, .subagent-panel-mark.errored, .subagent-panel-mark.interrupted, .subagent-panel-mark.notFound { background: var(--danger-panel); color: var(--red); }
+.subagent-panel-actions { display: flex; align-items: center; gap: 3px; }
+.subagent-panel-agents { min-height: 0; max-height: 190px; display: grid; align-content: start; gap: 4px; overflow-y: auto; padding: 8px; border-bottom: 1px solid var(--line); background: var(--surface-subtle); }
+.subagent-panel-agents > button { width: 100%; min-height: 52px; display: grid; grid-template-columns: 8px minmax(0,1fr) auto auto; align-items: center; gap: 8px; padding: 8px 9px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--ink); cursor: pointer; text-align: left; }
+.subagent-panel-agents > button:hover { background: var(--surface-hover); }
+.subagent-panel-agents > button.active { border-color: color-mix(in srgb,var(--accent) 40%,var(--line)); background: var(--paper); box-shadow: 0 2px 8px rgba(0,0,0,.06); }
+.subagent-panel-agents i { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.subagent-panel-agents i.running, .subagent-panel-agents i.pendingInit, .subagent-panel-agents i.inProgress, .subagent-panel-agents i.waitingApproval, .subagent-panel-agents i.waitingInput { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb,var(--accent) 13%,transparent); }
+.subagent-panel-agents i.completed, .subagent-panel-agents i.shutdown { background: var(--green); }
+.subagent-panel-agents i.failed, .subagent-panel-agents i.errored, .subagent-panel-agents i.interrupted, .subagent-panel-agents i.notFound { background: var(--red); }
+.subagent-panel-agents span { min-width: 0; }
+.subagent-panel-agents strong, .subagent-panel-agents small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-panel-agents strong { font-size: 12px; }
+.subagent-panel-agents small { margin-top: 3px; color: var(--muted); font-size: 10px; }
+.subagent-panel-agents em { padding: 4px 7px; border-radius: 99px; background: var(--panel); color: var(--muted); font-size: 10px; font-style: normal; white-space: nowrap; }
+.subagent-panel-agents > button.active em { color: var(--accent-dark); background: var(--accent-soft); }
+.subagent-panel-agents svg { color: var(--faint); }
 .subagent-panel-meta { min-width: 0; display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 7px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel); color: var(--muted); }
 .subagent-panel-meta > svg { color: var(--accent-dark); }
-.subagent-panel-meta > span { overflow: hidden; font: 7.5px Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
-.subagent-panel-meta > small { font-size: 7px; white-space: nowrap; }
+.subagent-panel-meta > span { overflow: hidden; font: 10px Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-panel-meta > small { font-size: 10px; white-space: nowrap; }
 .subagent-panel-body { min-height: 0; overflow-y: auto; padding: 13px 11px 40px; }
 .subagent-panel-body .timeline { gap: 13px; }
 .subagent-panel-body .message, .subagent-panel-body .tool-item, .subagent-panel-body .subagent-card, .subagent-panel-body .subagent-activity, .subagent-panel-body .subagent-live-panel { margin-left: 0; }
 .subagent-panel-body .tool-item { max-width: 100%; }
 .subagent-panel-body .reasoning-row { padding-left: 0; }
-.subagent-panel-body .message-text { font-size: 10.5px; }
-.subagent-panel-state { min-height: 230px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 9px; padding: 24px; color: var(--muted); font-size: 9px; text-align: center; }
+.subagent-panel-body .message-text { font-size: 12.5px; }
+.subagent-panel-state { min-height: 230px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 9px; padding: 24px; color: var(--muted); font-size: 11px; text-align: center; }
 .subagent-panel-state > svg { color: var(--accent-dark); }
 .subagent-panel-state.loading > svg:first-child { animation: spin 1.2s linear infinite; }
 .subagent-panel-state.error { color: var(--red); }

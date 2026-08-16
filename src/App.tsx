@@ -6,9 +6,10 @@ import { ApprovalCard } from "./components/ApprovalCard";
 import { LoginScreen } from "./components/LoginScreen";
 import { ModelPicker } from "./components/ModelPicker";
 import { findSkillMention, matchingPlugins, matchingSkills, SkillMentionMenu, type ProjectFileMention, type SkillMention } from "./components/SkillMentionMenu";
-import { Timeline, type AgentViewState } from "./components/Timeline";
+import { Timeline } from "./components/Timeline";
 import { ThreadMenu } from "./components/ThreadMenu";
-import type { AppEvent, ApprovalPolicy, Bootstrap, NotificationSummary, PluginSummary, PluginsResult, Project, ReasoningEffort, Skill, SkillsResult, Thread, ThreadItem, Turn } from "./types";
+import { resolveSubagentStates, runningAgentStatuses, threadAgentStatus, type AgentViewState } from "./subagents";
+import type { AppEvent, ApprovalPolicy, Bootstrap, NotificationSummary, PluginSummary, PluginsResult, Project, ReasoningEffort, Skill, SkillsResult, SubagentJoinState, Thread, ThreadItem, Turn } from "./types";
 
 const GlobalSearchDialog = lazy(() => import("./components/GlobalSearchDialog").then((module) => ({ default: module.GlobalSearchDialog })));
 const NotificationCenterDialog = lazy(() => import("./components/NotificationCenterDialog").then((module) => ({ default: module.NotificationCenterDialog })));
@@ -19,6 +20,11 @@ const SettingsDialog = lazy(() => import("./components/SettingsDialog").then((mo
 const SkillsDialog = lazy(() => import("./components/SkillsDialog").then((module) => ({ default: module.SkillsDialog })));
 const SubagentPanel = lazy(() => import("./components/SubagentPanel").then((module) => ({ default: module.SubagentPanel })));
 const WorkspacePanel = lazy(() => import("./components/WorkspacePanel").then((module) => ({ default: module.WorkspacePanel })));
+const automaticJoinClientIdPrefix = "fnos-subagent-join-";
+
+function visibleTurnItem(item: ThreadItem) {
+  return !(item.type === "userMessage" && item.clientId?.startsWith(automaticJoinClientIdPrefix));
+}
 
 function upsertItem(items: ThreadItem[], next: ThreadItem) {
   const index = items.findIndex((item) => item.id === next.id);
@@ -50,7 +56,7 @@ function attachTurnTiming(items: ThreadItem[], turn: Turn) {
 
 function transcript(thread?: Thread | null) {
   return thread?.turns?.flatMap((turn) => {
-    let items: ThreadItem[] = (turn.items ?? []).map((item) => ({ ...item, turnId: turn.id }));
+    let items: ThreadItem[] = (turn.items ?? []).filter(visibleTurnItem).map((item) => ({ ...item, turnId: turn.id }));
     const hasAgentReply = items.some((item) => (item.type === "agentMessage" || item.type === "plan") && item.text?.trim());
     if (turn.status === "failed") items.push(turnErrorItem(turn.id, turn.error, false, false, turn));
     else if (turn.status === "completed" && !hasAgentReply && items.some((item) => item.type === "userMessage")) items.push(turnErrorItem(turn.id, null, true, false, turn));
@@ -211,6 +217,7 @@ export default function App() {
   const [pendingRequests, setPendingRequests] = useState<Array<{ id: number; method: string; params: Record<string, any> }>>([]);
   const [turnRunning, setTurnRunning] = useState(false);
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
+  const [subagentJoin, setSubagentJoin] = useState<SubagentJoinState | null>(null);
   const [activeTurnStartedAtMs, setActiveTurnStartedAtMs] = useState<number | null>(null);
   const [composer, setComposer] = useState("");
   const [sending, setSending] = useState(false);
@@ -233,6 +240,7 @@ export default function App() {
   const [threadsCollapsed, setThreadsCollapsed] = useState(() => localStorage.getItem("codex-fnos-threads-collapsed") === "true");
   const [workspacePanel, setWorkspacePanel] = useState(false);
   const [selectedSubagent, setSelectedSubagent] = useState<AgentViewState | null>(null);
+  const [subagentThreads, setSubagentThreads] = useState<Thread[]>([]);
   const [workspaceFileRequest, setWorkspaceFileRequest] = useState<{ path: string; nonce: number } | null>(null);
   const [scrollPosition, setScrollPosition] = useState({ atTop: true, atBottom: true });
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
@@ -240,6 +248,7 @@ export default function App() {
   const sendingRef = useRef(false);
   const sendingOperationRef = useRef(0);
   const turnRunningRef = useRef(false);
+  const subagentJoinWaitingRef = useRef(false);
   const activeTurnIdRef = useRef<string | null>(null);
   const activeTurnStartedAtRef = useRef<number | null>(null);
   const selectionProjectRef = useRef<string | null | undefined>(undefined);
@@ -264,11 +273,56 @@ export default function App() {
 
   useEffect(() => setSelectedSubagent(null), [selectedThreadId]);
 
+  useEffect(() => {
+    if (!selectedThreadId) {
+      setSubagentThreads([]);
+      return;
+    }
+    const rootThreadId = selectedThreadId;
+    let cancelled = false;
+    let timer: number | null = null;
+    const controller = new AbortController();
+    async function load() {
+      try {
+        const result = await api<{ data: Thread[]; join?: SubagentJoinState | null }>(`/api/threads/${encodeURIComponent(rootThreadId)}/subagents`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (cancelled) return;
+        const next = result.data ?? [];
+        setSubagentThreads(next);
+        setSubagentJoin(result.join ?? null);
+        const hasActive = next.some((thread) => runningAgentStatuses.has(threadAgentStatus(thread)));
+        timer = window.setTimeout(load, hasActive || turnRunningRef.current || subagentJoinWaitingRef.current ? 1200 : 4500);
+      } catch (reason) {
+        if (cancelled || (reason instanceof DOMException && reason.name === "AbortError")) return;
+        timer = window.setTimeout(load, 4500);
+      }
+    }
+    setSubagentThreads([]);
+    void load();
+    return () => {
+      cancelled = true;
+      controller.abort();
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [selectedThreadId]);
+
   const selectedProject = bootstrap?.projects.find((project) => project.id === selectedProjectId) ?? null;
   const selectedThread = threads.find((thread) => thread.id === selectedThreadId) ?? null;
   const visibleThreads = threads.filter((thread) => threadTitle(thread).toLowerCase().includes(threadSearch.toLowerCase()));
   const currentQueuedMessages = queuedMessages.filter((item) => item.threadId === selectedThreadId);
   const canSteer = turnRunning && Boolean(activeTurnId) && !sending;
+  const resolvedSubagents = useMemo(
+    () => resolveSubagentStates(items, activeTurnId, subagentThreads),
+    [activeTurnId, items, subagentThreads],
+  );
+  const selectedSubagentState = selectedSubagent
+    ? resolvedSubagents.find((agent) => agent.id === selectedSubagent.id) ?? selectedSubagent
+    : null;
+  const runningSubagentCount = resolvedSubagents.filter((agent) => runningAgentStatuses.has(agent.status)).length;
+  const subagentJoinWaiting = subagentJoin?.status === "checking" || subagentJoin?.status === "waiting" || subagentJoin?.status === "finalizing";
+  const conversationBusy = turnRunning || subagentJoinWaiting;
   const retryProviders = useMemo(() => {
     if (!bootstrap) return [];
     const runtimeModelProvider = selectedThread?.runtimeModelProvider ?? selectedThread?.modelProvider ?? "";
@@ -345,6 +399,7 @@ export default function App() {
   useEffect(() => { composerValueRef.current = composer; }, [composer]);
   useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
   useEffect(() => { selectedSkillsRef.current = selectedSkills; }, [selectedSkills]);
+  useEffect(() => { subagentJoinWaitingRef.current = subagentJoinWaiting; }, [subagentJoinWaiting]);
   useEffect(() => {
     if (!selectedThreadId) return;
     const previous = conversationCacheRef.current.get(selectedThreadId);
@@ -379,10 +434,12 @@ export default function App() {
     sendingOperationRef.current += 1;
     sendingRef.current = false;
     turnRunningRef.current = false;
+    subagentJoinWaitingRef.current = false;
     activeTurnIdRef.current = null;
     activeTurnStartedAtRef.current = null;
     setSending(false);
     setTurnRunning(false);
+    setSubagentJoin(null);
     setActiveTurnId(null);
     setActiveTurnStartedAtMs(null);
     setStreamingItemId(null);
@@ -598,6 +655,19 @@ export default function App() {
       }
       return;
     }
+    if (event.kind === "subagent_join") {
+      if (event.threadId !== selectedThreadRef.current) return;
+      if (event.status === "waiting" || event.status === "finalizing") {
+        const next = { status: event.status, activeCount: event.activeCount, rootTurnId: event.rootTurnId, error: event.error } as SubagentJoinState;
+        subagentJoinWaitingRef.current = true;
+        setSubagentJoin(next);
+      } else {
+        subagentJoinWaitingRef.current = false;
+        setSubagentJoin(null);
+        if (event.status === "failed") setFatalError(event.error || "子代理结束后，主任务自动恢复失败");
+      }
+      return;
+    }
     if (event.kind === "server_request") {
       if (event.request.method === "currentTime/read") {
         void api("/api/rpc/respond", { method: "POST", body: JSON.stringify({ id: event.request.id, result: { currentTimeAt: Math.floor(Date.now() / 1000) } }) });
@@ -619,6 +689,21 @@ export default function App() {
     if (event.method === "account/updated" || event.method === "account/login/completed" || event.method === "account/rateLimits/updated") {
       void loadBootstrap();
     }
+    if (event.method === "thread/started" && params.thread?.parentThreadId) {
+      setSubagentThreads((current) => {
+        const belongsToSelectedTree = params.thread.parentThreadId === selectedThreadRef.current
+          || current.some((thread) => thread.id === params.thread.parentThreadId);
+        if (!belongsToSelectedTree) return current;
+        return current.some((thread) => thread.id === params.thread.id)
+          ? current.map((thread) => thread.id === params.thread.id ? { ...thread, ...params.thread } : thread)
+          : [params.thread, ...current];
+      });
+    }
+    if (event.method === "thread/status/changed" && params.threadId && params.status) {
+      setSubagentThreads((current) => current.map((thread) => thread.id === params.threadId
+        ? { ...thread, status: params.status, updatedAt: Math.floor(Date.now() / 1000) }
+        : thread));
+    }
     if (params.threadId && params.threadId !== selectedThreadRef.current) return;
     if (event.method === "error") {
       const turnId = activeTurnIdRef.current || `current-${params.threadId || "thread"}`;
@@ -636,6 +721,7 @@ export default function App() {
       return;
     }
     if (event.method === "item/started" && params.item) {
+      if (!visibleTurnItem(params.item)) return;
       const eventItem = { ...params.item, turnId: params.turnId ?? params.turn?.id };
       if (params.item.type === "userMessage" && optimisticUserItemId.current) {
         const optimisticId = optimisticUserItemId.current;
@@ -666,6 +752,7 @@ export default function App() {
       return;
     }
     if (event.method === "item/completed" && params.item) {
+      if (!visibleTurnItem(params.item)) return;
       deltaQueue.current.delete(params.item.id);
       setItems((current) => {
         const existing = current.find((item) => item.id === params.item.id);
@@ -690,7 +777,7 @@ export default function App() {
       };
       setItems((current) => {
         let next = current.filter((item) => item.id !== `turn-error:${turnId}`);
-        for (const item of Array.isArray(turn.items) ? turn.items : []) next = upsertItem(next, { ...item, turnId });
+        for (const item of (Array.isArray(turn.items) ? turn.items : []).filter(visibleTurnItem)) next = upsertItem(next, { ...item, turnId });
         const hasReply = next.some((item) => item.turnId === turnId && (item.type === "agentMessage" || item.type === "plan") && item.text?.trim());
         if (turn.status === "failed") return upsertItem(next, turnErrorItem(turnId, turn.error, false, false, completedTurn));
         if (turn.status === "completed" && !hasReply) return upsertItem(next, turnErrorItem(turnId, null, true, false, completedTurn));
@@ -1004,7 +1091,7 @@ export default function App() {
     activeTurnIdRef.current = null;
     setFatalError("");
     try {
-      const result = await api<{ thread: Thread; activeTurnId?: string | null; activeTurnStartedAt?: number | null; model: string; modelProvider: string; reasoningEffort?: ReasoningEffort | null; approvalPolicy: ApprovalPolicy; networkAccess?: boolean }>(`/api/threads/${thread.id}/resume`, { method: "POST", body: "{}", signal: controller.signal });
+      const result = await api<{ thread: Thread; activeTurnId?: string | null; activeTurnStartedAt?: number | null; model: string; modelProvider: string; reasoningEffort?: ReasoningEffort | null; approvalPolicy: ApprovalPolicy; networkAccess?: boolean; subagentJoin?: SubagentJoinState | null }>(`/api/threads/${thread.id}/resume`, { method: "POST", body: "{}", signal: controller.signal });
       if (requestId !== openThreadRequestRef.current || selectedThreadRef.current !== thread.id) return;
       const resumedThread = { ...result.thread, model: result.model, modelProvider: result.modelProvider, reasoningEffort: result.reasoningEffort, approvalPolicy: result.approvalPolicy, networkAccess: result.networkAccess ?? result.thread.networkAccess ?? bootstrap?.settings.networkAccess ?? true };
       setThreads((current) => current.some((item) => item.id === thread.id)
@@ -1039,6 +1126,9 @@ export default function App() {
       setSelectedEffort(saved?.effort ?? result.reasoningEffort ?? "");
       setSelectedApprovalPolicy(result.approvalPolicy ?? bootstrap?.settings.approvalPolicy ?? "on-request");
       setSelectedNetworkAccess(Boolean(result.networkAccess ?? result.thread.networkAccess ?? bootstrap?.settings.networkAccess ?? true));
+      const restoredJoin = result.subagentJoin ?? null;
+      subagentJoinWaitingRef.current = Boolean(restoredJoin);
+      setSubagentJoin(restoredJoin);
     } catch (reason) {
       if (requestId !== openThreadRequestRef.current || selectedThreadRef.current !== thread.id) return;
       if (reason instanceof DOMException && reason.name === "AbortError") return;
@@ -1134,7 +1224,7 @@ export default function App() {
     const payload = payloadOverride ?? { text: composer, attachments, skills: selectedSkills };
     if ((!payload.text.trim() && payload.attachments.length === 0 && payload.skills.length === 0) || !selectedProject) return;
     scrollConversationAfterSend();
-    if ((turnRunningRef.current || sendingRef.current) && !payload.fromQueue) {
+    if ((turnRunningRef.current || subagentJoinWaitingRef.current || sendingRef.current) && !payload.fromQueue) {
       const threadId = forcedThreadId || selectedThreadId;
       if (!threadId) return;
       setQueuedMessages((current) => [...current, { ...payload, id: createClientId(), threadId }]);
@@ -1204,12 +1294,12 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (turnRunning || sending || !selectedThreadId) return;
+    if (conversationBusy || sending || !selectedThreadId) return;
     const next = queuedMessages.find((item) => item.threadId === selectedThreadId);
     if (!next) return;
     setQueuedMessages((current) => current.filter((item) => item.id !== next.id));
     void startMessage({ ...next, fromQueue: true }, next.threadId);
-  }, [queuedMessages, selectedThreadId, sending, turnRunning]);
+  }, [conversationBusy, queuedMessages, selectedThreadId, sending]);
 
   async function switchRetryProvider(providerId: string) {
     if (!selectedThread) throw new Error("当前没有可重试的会话");
@@ -1252,8 +1342,8 @@ export default function App() {
   }
 
   async function editAndBranch(item: ThreadItem, preset?: string, skipPrompt = false) {
-    if (!selectedThread || !item.turnId || turnRunningRef.current || sendingRef.current) {
-      setFatalError(turnRunningRef.current || sendingRef.current ? "请先等待当前回复结束，再编辑或重新生成。" : "这条历史消息缺少轮次信息，无法从这里创建分支。");
+    if (!selectedThread || !item.turnId || turnRunningRef.current || subagentJoinWaitingRef.current || sendingRef.current) {
+      setFatalError(turnRunningRef.current || subagentJoinWaitingRef.current || sendingRef.current ? "请先等待当前回复及子代理收口结束，再编辑或重新生成。" : "这条历史消息缺少轮次信息，无法从这里创建分支。");
       return;
     }
     const original = outgoingFromItem(item, availableSkills);
@@ -1345,7 +1435,7 @@ export default function App() {
   }
 
   async function archiveThread(thread: Thread) {
-    if (thread.id === selectedThreadId && turnRunning) {
+    if (thread.id === selectedThreadId && conversationBusy) {
       setFatalError("当前会话还在运行，请先停止后再归档。");
       return;
     }
@@ -1411,7 +1501,7 @@ export default function App() {
   }
 
   async function deleteThread(thread: Thread) {
-    if (thread.id === selectedThreadId && turnRunning) {
+    if (thread.id === selectedThreadId && conversationBusy) {
       setFatalError("当前会话还在运行，请先停止后再删除");
       return;
     }
@@ -1532,7 +1622,7 @@ export default function App() {
               <button className="thread-button" onMouseEnter={() => void prefetchThread(thread)} onFocus={() => void prefetchThread(thread)} onClick={() => void (thread.archived ? selectSearchResult(thread) : openThread(thread))}>
                 <span className="thread-title">{threadTitle(thread)}</span><span className="thread-meta">{friendlyTime(thread.updatedAt || thread.createdAt)}</span>
               </button>
-              <ThreadMenu thread={thread} disabled={thread.id === selectedThreadId && turnRunning} onRename={(item) => void renameThread(item)} onTogglePin={(item) => void toggleThreadPin(item)} onArchive={(item) => void archiveThread(item)} onRestore={(item) => void restoreThread(item)} onDelete={(item) => void deleteThread(item)} />
+              <ThreadMenu thread={thread} disabled={thread.id === selectedThreadId && conversationBusy} onRename={(item) => void renameThread(item)} onTogglePin={(item) => void toggleThreadPin(item)} onArchive={(item) => void archiveThread(item)} onRestore={(item) => void restoreThread(item)} onDelete={(item) => void deleteThread(item)} />
             </div>
           ))}
           {selectedProject && threads.length === 0 && <div className="empty-threads">{showArchived ? <Archive size={22} /> : <MessageSquarePlus size={22} />}<span>{showArchived ? "这个项目没有已归档会话" : "这个项目还没有会话"}</span>{!showArchived && <button onClick={() => void createThread(true)}>新建会话</button>}</div>}
@@ -1546,8 +1636,8 @@ export default function App() {
           <div className="conversation-title"><strong>{selectedThread ? threadTitle(selectedThread) : selectedProject?.name || "Codex 工作台"}</strong><span>{selectedProject?.path || "创建或选择一个项目开始"}</span></div>
           <button className="icon-button mobile-tools-button" onClick={() => setMobileToolsOpen((value) => !value)} aria-label="更多会话工具"><MoreHorizontal size={19} /></button>
           <div className={`conversation-tools ${mobileToolsOpen ? "mobile-open" : ""}`}>
-            <label className="approval-policy-picker" title="当前会话的命令审批策略"><ShieldCheck size={15} /><select value={selectedApprovalPolicy} disabled={!selectedProject || turnRunning} onChange={(event) => void selectApprovalPolicy(event.target.value as ApprovalPolicy)}><option value="on-request">需要审批</option><option value="never">自动审批</option></select></label>
-            <button className={`network-access-toggle ${selectedNetworkAccess ? "enabled" : ""}`} disabled={!selectedProject || turnRunning} title={selectedNetworkAccess ? "当前会话允许命令访问网络；应用代理会传给 Codex" : "当前会话的命令网络访问被沙箱阻止"} onClick={() => void selectNetworkAccess(!selectedNetworkAccess)}>{selectedNetworkAccess ? <Wifi size={14} /> : <WifiOff size={14} />}<span>{selectedNetworkAccess ? "允许联网" : "禁止联网"}</span></button>
+            <label className="approval-policy-picker" title="当前会话的命令审批策略"><ShieldCheck size={15} /><select value={selectedApprovalPolicy} disabled={!selectedProject || conversationBusy} onChange={(event) => void selectApprovalPolicy(event.target.value as ApprovalPolicy)}><option value="on-request">需要审批</option><option value="never">自动审批</option></select></label>
+            <button className={`network-access-toggle ${selectedNetworkAccess ? "enabled" : ""}`} disabled={!selectedProject || conversationBusy} title={selectedNetworkAccess ? "当前会话允许命令访问网络；应用代理会传给 Codex" : "当前会话的命令网络访问被沙箱阻止"} onClick={() => void selectNetworkAccess(!selectedNetworkAccess)}>{selectedNetworkAccess ? <Wifi size={14} /> : <WifiOff size={14} />}<span>{selectedNetworkAccess ? "允许联网" : "禁止联网"}</span></button>
             <ModelPicker
               bootstrap={bootstrap}
               open={modelPickerOpen}
@@ -1562,11 +1652,12 @@ export default function App() {
             />
             <button className="icon-button" disabled={!selectedProject} title="Skills 管理（已启用的 Skill 可智能调用）" aria-label="Skills 管理" onClick={() => { setMobileToolsOpen(false); setSkillsDialog(true); }}><Sparkles size={17} /></button>
             <button className="icon-button" title="插件市场与已安装插件" aria-label="插件" onClick={() => { setMobileToolsOpen(false); setPluginsDialog(true); }}><Boxes size={17} /></button>
+            {resolvedSubagents.length > 0 && <button className={`icon-button notification-button ${selectedSubagentState ? "active-tool" : ""}`} title={`子代理：${runningSubagentCount} 个运行或等待中，${resolvedSubagents.length} 个总计`} aria-label="打开右侧子代理面板" onClick={() => { setMobileToolsOpen(false); setWorkspacePanel(false); setSelectedSubagent(resolvedSubagents[0]); }}><Bot size={17} />{runningSubagentCount > 0 && <span>{runningSubagentCount}</span>}</button>}
             <button className="icon-button" title="定时任务" aria-label="定时任务" onClick={() => { setMobileToolsOpen(false); setScheduledTasksDialog(true); }}><CalendarClock size={17} /></button>
             <button className="icon-button notification-button" title="通知中心" aria-label={`通知中心，${notificationSummary.unread} 条未读`} onClick={() => { setMobileToolsOpen(false); setNotificationDialog(true); }}><Bell size={17} />{notificationSummary.unread > 0 && <span>{notificationSummary.unread > 99 ? "99+" : notificationSummary.unread}</span>}</button>
             <button className={`icon-button ${workspacePanel ? "active-tool" : ""}`} disabled={!selectedProject} title="项目文件和改动" aria-label="项目文件和改动" onClick={() => { setMobileToolsOpen(false); setSelectedSubagent(null); setWorkspacePanel((value) => !value); }}><Code2 size={17} /></button>
             <button className="icon-button header-settings-button" title="设置" aria-label="设置" onClick={() => { setMobileToolsOpen(false); setSettingsDialog(true); }}><Settings size={17} /></button>
-            <button className="icon-button danger" disabled={!selectedThread || turnRunning} title="删除当前会话" aria-label="删除当前会话" onClick={() => { setMobileToolsOpen(false); if (selectedThread) void deleteThread(selectedThread); }}><Trash2 size={17} /></button>
+            <button className="icon-button danger" disabled={!selectedThread || conversationBusy} title="删除当前会话" aria-label="删除当前会话" onClick={() => { setMobileToolsOpen(false); if (selectedThread) void deleteThread(selectedThread); }}><Trash2 size={17} /></button>
           </div>
         </header>
 
@@ -1578,7 +1669,7 @@ export default function App() {
             ) : (
               <div className="conversation-inner">
                 {threadLoading && items.length === 0 && <div className="conversation-loading" role="status"><span className="spin" />正在载入聊天记录…</div>}
-                <Timeline key={selectedThreadId ?? "empty"} items={items} streamingItemId={streamingItemId} turnRunning={turnRunning} activeTurnId={activeTurnId} activeTurnStartedAtMs={activeTurnStartedAtMs} retryProviders={retryProviders} retryProviderId={retryProviderId} projectPath={selectedProject.path} onOpenFile={openWorkspaceFile} onSuggestion={(text) => setComposer(text)} onResend={(item, providerId) => void resendUserMessage(item, providerId)} onRegenerate={regenerateMessage} onEditBranch={(item) => void editAndBranch(item)} onOpenSubagent={(agent) => { setWorkspacePanel(false); setSelectedSubagent(agent); }} />
+                <Timeline key={selectedThreadId ?? "empty"} items={items} streamingItemId={streamingItemId} turnRunning={conversationBusy} activeTurnId={activeTurnId} activeTurnStartedAtMs={activeTurnStartedAtMs} subagents={resolvedSubagents} retryProviders={retryProviders} retryProviderId={retryProviderId} projectPath={selectedProject.path} onOpenFile={openWorkspaceFile} onSuggestion={(text) => setComposer(text)} onResend={(item, providerId) => void resendUserMessage(item, providerId)} onRegenerate={regenerateMessage} onEditBranch={(item) => void editAndBranch(item)} onOpenSubagent={(agent) => { setWorkspacePanel(false); setSelectedSubagent(agent); }} />
                 {pendingRequests.filter((request) => !request.params.threadId || request.params.threadId === selectedThreadId).map((request) => <ApprovalCard key={request.id} request={request} onResolved={(id) => setPendingRequests((current) => current.filter((item) => item.id !== id))} />)}
               </div>
             )}
@@ -1590,20 +1681,20 @@ export default function App() {
         </div>
 
         <footer className="composer-wrap">
-          <div className={`composer-box ${turnRunning || sending ? "running" : ""}`}>
+          <div className={`composer-box ${conversationBusy || sending ? "running" : ""}`}>
             {skillMention && <SkillMentionMenu skills={mentionSkills} plugins={mentionPlugins} files={mentionFiles} activeIndex={Math.min(skillMentionIndex, Math.max(mentionOptionCount - 1, 0))} loading={skillsLoading} pluginLoading={pluginsLoading} fileLoading={mentionFilesLoading} error={skillsError} pluginError={pluginsError} fileError={mentionFilesError} limitReached={selectedSkills.length >= 6} fileLimitReached={attachments.length >= 6} onActiveIndexChange={setSkillMentionIndex} onSelect={selectMentionSkill} onSelectPlugin={selectMentionPlugin} onSelectFile={(file) => void selectMentionFile(file)} onManage={() => { setSkillMention(null); setSkillsDialog(true); }} onManagePlugins={() => { setSkillMention(null); setPluginsDialog(true); }} />}
             {selectedSkills.length > 0 && <div className="selected-skills" aria-label="本条消息强制使用的 Skills">{selectedSkills.map((skill) => <div className="skill-chip" key={skill.path} title="本条消息强制使用"><Sparkles size={13} /><span>@{skill.interface?.displayName || skill.name}</span><button onClick={() => setSelectedSkills((current) => current.filter((item) => item.path !== skill.path))} aria-label={`移除 Skill ${skill.name}`}><X size={12} /></button></div>)}</div>}
             {attachments.length > 0 && <div className="attachment-list">{attachments.map((item) => <div className="attachment-chip" key={item.id}>{item.kind === "image" ? <Image size={14} /> : <FileText size={14} />}<span><strong>{item.name}</strong><small>{Math.max(1, Math.round(item.size / 1024))} KB</small></span><button onClick={() => setAttachments((current) => current.filter((entry) => entry.id !== item.id))} aria-label={`移除 ${item.name}`}><X size={13} /></button></div>)}</div>}
             {currentQueuedMessages.length > 0 && <div className="queued-messages"><span>等待发送 {currentQueuedMessages.length} 条（当前回复结束后自动发送）</span>{currentQueuedMessages.map((item, index) => <div key={item.id}><em>{item.text.trim() || `附件消息 ${index + 1}`}</em><button className="queued-steer-button" disabled={!canSteer} onClick={() => void steerQueuedMessage(item)} title="现在追加到当前回复" aria-label="立即追加这条待发送消息"><CornerDownRight size={12} /></button><button onClick={() => setQueuedMessages((current) => current.filter((entry) => entry.id !== item.id))} aria-label="取消待发送消息"><X size={12} /></button></div>)}</div>}
-            <textarea ref={composerRef} value={composer} onChange={handleComposerChange} onSelect={(event) => updateSkillMention(composer, event.currentTarget.selectionStart)} onBlur={() => window.setTimeout(() => setSkillMention(null), 120)} onPaste={(event) => { const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/")); if (images.length > 0) { event.preventDefault(); void addAttachments(images); } }} onKeyDown={handleComposerKeyDown} placeholder={turnRunning || sending ? "继续输入，可立即追加或等待发送…" : selectedProject ? "告诉 Codex 你想完成什么… 输入 @ 选择 Skill、插件、文件或目录" : "请先选择项目"} disabled={!selectedProject || bootstrap.bridge.status !== "ready"} rows={1} />
-            <div className="composer-actions"><div className="composer-left"><input ref={attachmentInputRef} className="sr-only" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.json,.jsonl,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.toml,.ini,.env,.sh,.py,.java,.go,.rs,.sql,.log,.csv" onChange={(event) => void addAttachments(event.target.files)} /><button className="attach-button" disabled={!selectedProject || attachments.length >= 6} onClick={() => attachmentInputRef.current?.click()} title="添加图片或文本/代码文件"><Paperclip size={15} /> <span>附件</span></button><button className="attach-button" disabled={!selectedProject} onClick={() => setSkillsDialog(true)} title="管理允许智能调用的 Skills"><Sparkles size={15} /> <span>Skills</span></button><span>{turnRunning || sending ? "Enter 等待发送 · Ctrl/⌘+Enter 立即追加" : "输入 @ 选择 Skill/插件/项目内容 · Enter 发送"}</span></div><div className="composer-right">{turnRunning && <button className="stop-button" onClick={() => void interrupt()}><Square size={14} /> 停止</button>}{turnRunning || sending ? <><button className="send-choice-button steer-button" onClick={() => void steerMessage()} disabled={!canSteer || (!composer.trim() && attachments.length === 0 && selectedSkills.length === 0)} title="立即影响当前正在生成的回复"><CornerDownRight size={14} /><span>立即追加</span></button><button className="send-choice-button queue-button" onClick={() => void sendMessage()} disabled={(!composer.trim() && attachments.length === 0 && selectedSkills.length === 0) || !selectedProject} title="当前回复结束后自动发送"><Clock3 size={14} /><span>等待发送</span></button></> : <button className="send-button" onClick={() => void sendMessage()} disabled={(!composer.trim() && attachments.length === 0 && selectedSkills.length === 0) || !selectedProject} aria-label="发送消息"><Send size={17} /></button>}</div></div>
+            <textarea ref={composerRef} value={composer} onChange={handleComposerChange} onSelect={(event) => updateSkillMention(composer, event.currentTarget.selectionStart)} onBlur={() => window.setTimeout(() => setSkillMention(null), 120)} onPaste={(event) => { const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/")); if (images.length > 0) { event.preventDefault(); void addAttachments(images); } }} onKeyDown={handleComposerKeyDown} placeholder={conversationBusy || sending ? subagentJoinWaiting ? "主任务正在等待子代理；新消息可排队发送…" : "继续输入，可立即追加或等待发送…" : selectedProject ? "告诉 Codex 你想完成什么… 输入 @ 选择 Skill、插件、文件或目录" : "请先选择项目"} disabled={!selectedProject || bootstrap.bridge.status !== "ready"} rows={1} />
+            <div className="composer-actions"><div className="composer-left"><input ref={attachmentInputRef} className="sr-only" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.json,.jsonl,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.toml,.ini,.env,.sh,.py,.java,.go,.rs,.sql,.log,.csv" onChange={(event) => void addAttachments(event.target.files)} /><button className="attach-button" disabled={!selectedProject || attachments.length >= 6} onClick={() => attachmentInputRef.current?.click()} title="添加图片或文本/代码文件"><Paperclip size={15} /> <span>附件</span></button><button className="attach-button" disabled={!selectedProject} onClick={() => setSkillsDialog(true)} title="管理允许智能调用的 Skills"><Sparkles size={15} /> <span>Skills</span></button><span>{conversationBusy || sending ? subagentJoinWaiting ? "Enter 加入等待队列 · 子代理结束后自动继续" : "Enter 等待发送 · Ctrl/⌘+Enter 立即追加" : "输入 @ 选择 Skill/插件/项目内容 · Enter 发送"}</span></div><div className="composer-right">{turnRunning && <button className="stop-button" onClick={() => void interrupt()}><Square size={14} /> 停止</button>}{conversationBusy || sending ? <><button className="send-choice-button steer-button" onClick={() => void steerMessage()} disabled={!canSteer || (!composer.trim() && attachments.length === 0 && selectedSkills.length === 0)} title={subagentJoinWaiting ? "当前正在等待子代理，暂时不能立即追加" : "立即影响当前正在生成的回复"}><CornerDownRight size={14} /><span>立即追加</span></button><button className="send-choice-button queue-button" onClick={() => void sendMessage()} disabled={(!composer.trim() && attachments.length === 0 && selectedSkills.length === 0) || !selectedProject} title="主任务全部收口后自动发送"><Clock3 size={14} /><span>等待发送</span></button></> : <button className="send-button" onClick={() => void sendMessage()} disabled={(!composer.trim() && attachments.length === 0 && selectedSkills.length === 0) || !selectedProject} aria-label="发送消息"><Send size={17} /></button>}</div></div>
           </div>
           <small className="composer-note">Codex 可能会出错，请在执行重要操作前检查文件变更和命令。</small>
         </footer>
       </main>
 
       <Suspense fallback={null}>
-        {selectedSubagent && selectedProject && <SubagentPanel agent={selectedSubagent} projectPath={selectedProject.path} onClose={() => setSelectedSubagent(null)} onOpenFile={openWorkspaceFile} onOpenSubagent={setSelectedSubagent} />}
+        {selectedSubagentState && selectedProject && selectedThreadId && <SubagentPanel rootThreadId={selectedThreadId} agent={selectedSubagentState} agents={resolvedSubagents} projectPath={selectedProject.path} onClose={() => setSelectedSubagent(null)} onOpenFile={openWorkspaceFile} onOpenSubagent={setSelectedSubagent} />}
         {workspacePanel && selectedProject && <WorkspacePanel project={selectedProject} items={items} requestedFile={workspaceFileRequest} onClose={() => setWorkspacePanel(false)} />}
         {projectDialog && <ProjectDialog open bootstrap={bootstrap} onClose={() => setProjectDialog(false)} onCreated={loadBootstrap} />}
         {globalSearchOpen && <GlobalSearchDialog open onClose={() => setGlobalSearchOpen(false)} onSelect={selectSearchResult} />}

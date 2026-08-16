@@ -1,8 +1,18 @@
-import type { ThreadItem } from "./types";
+import type { Thread, ThreadItem } from "./types";
 
-export type AgentViewState = { id: string; path?: string; status: string; message?: string | null };
+export type AgentViewState = {
+  id: string;
+  path?: string;
+  status: string;
+  message?: string | null;
+  name?: string | null;
+  role?: string | null;
+  parentThreadId?: string | null;
+  updatedAt?: number;
+  activeFlags?: string[];
+};
 
-export const runningAgentStatuses = new Set(["pendingInit", "running", "inProgress"]);
+export const runningAgentStatuses = new Set(["pendingInit", "running", "inProgress", "waitingApproval", "waitingInput"]);
 
 export function collabAgentStates(item: ThreadItem) {
   const states = Object.entries(item.agentsStates ?? {}).map(([id, state]) => ({
@@ -49,5 +59,41 @@ export function subagentStates(items: ThreadItem[], activeTurnId: string | null 
     return runningAgentStatuses.has(state.status) && !belongsToActiveTurn
       ? { ...state, status: "completed" }
       : state;
+  });
+}
+
+export function threadAgentStatus(thread: Thread) {
+  const type = typeof thread.status === "string" ? thread.status : thread.status?.type;
+  const activeFlags = typeof thread.status === "object" ? thread.status?.activeFlags ?? [] : [];
+  if (type === "systemError") return "failed";
+  if (type === "active") {
+    if (activeFlags.includes("waitingOnApproval")) return "waitingApproval";
+    if (activeFlags.includes("waitingOnUserInput")) return "waitingInput";
+    return "running";
+  }
+  if (type === "idle" || type === "notLoaded") return "completed";
+  return type || "completed";
+}
+
+export function resolveSubagentStates(items: ThreadItem[], activeTurnId: string | null, threads: Thread[] = []) {
+  const states = new Map(subagentStates(items, activeTurnId).map((state) => [state.id, state]));
+  for (const thread of threads) {
+    const previous = states.get(thread.id);
+    states.set(thread.id, {
+      ...previous,
+      id: thread.id,
+      status: threadAgentStatus(thread),
+      name: thread.agentNickname || thread.name || previous?.name,
+      role: thread.agentRole || previous?.role,
+      parentThreadId: thread.parentThreadId ?? previous?.parentThreadId,
+      updatedAt: thread.updatedAt,
+      activeFlags: typeof thread.status === "object" ? thread.status?.activeFlags ?? [] : [],
+    });
+  }
+  return [...states.values()].sort((left, right) => {
+    const leftRunning = runningAgentStatuses.has(left.status) || left.status.startsWith("waiting");
+    const rightRunning = runningAgentStatuses.has(right.status) || right.status.startsWith("waiting");
+    if (leftRunning !== rightRunning) return leftRunning ? -1 : 1;
+    return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
   });
 }

@@ -113,7 +113,7 @@ function publicCodexStatus(value) {
   return result;
 }
 
-export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart, appearance, updater, workspace, skills, extensions, schedules, notifications }) {
+export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart, appearance, updater, workspace, skills, extensions, schedules, notifications, subagentJoins = null }) {
   const findProject = (id) => stores.listProjects().find((item) => item.id === id);
   const findProvider = (id) => stores.listProviders().find((item) => item.id === id);
   const decorateThread = (thread, extra = {}) => {
@@ -163,7 +163,7 @@ export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart,
         }
       }
       sendJson(res, 200, {
-        version: "0.9.8",
+        version: "0.9.11",
         providers: stores.listProviders(),
         proxies: stores.listProxies(),
         projects: stores.listProjects(),
@@ -755,6 +755,21 @@ export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart,
       sendJson(res, 201, { ...result, thread: decorateThread(result.thread), approvalPolicy: result.approvalPolicy ?? approvalPolicy, networkAccess });
       return;
     }
+    params = route(req.method, pathname, { method: "GET", path: /^\/api\/threads\/(?<id>[^/]+)\/subagents$/ });
+    if (params) {
+      const result = await bridge.request("thread/list", {
+        limit: 100,
+        archived: false,
+        ancestorThreadId: params.id,
+        modelProviders: [],
+      });
+      sendJson(res, 200, {
+        ...result,
+        data: sortThreads((result.data ?? []).map((thread) => decorateThread(thread))),
+        join: subagentJoins?.snapshot(params.id) ?? null,
+      });
+      return;
+    }
     params = route(req.method, pathname, { method: "GET", path: /^\/api\/threads\/(?<id>[^/]+)$/ });
     if (params) {
       const result = await bridge.request("thread/read", { threadId: params.id, includeTurns: true });
@@ -783,13 +798,22 @@ export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart,
     }
     params = route(req.method, pathname, { method: "POST", path: /^\/api\/threads\/(?<id>[^/]+)\/resume$/ });
     if (params) {
-      const result = await bridge.request("thread/resume", { threadId: params.id });
+      const projectId = stores.getThreadPreferences(params.id)?.projectId ?? null;
+      const project = projectId ? findProject(projectId) : null;
+      const result = await bridge.request("thread/resume", {
+        threadId: params.id,
+        developerInstructions: composeDeveloperInstructions(stores.getSettings(), project?.instructions),
+      });
       const approvalPolicy = stores.getThreadApprovalPolicy(params.id);
       if (approvalPolicy && approvalPolicy !== result.approvalPolicy) {
         await bridge.request("thread/settings/update", { threadId: params.id, approvalPolicy });
       }
       const thread = decorateThread({ ...result.thread, model: result.model, modelProvider: result.modelProvider ?? result.thread?.modelProvider });
       const activeTurn = findActiveTurn(thread);
+      if (!activeTurn && subagentJoins) {
+        const lastCompletedTurn = [...(thread.turns ?? [])].reverse().find((turn) => turn?.status === "completed");
+        await subagentJoins.ensure(params.id, lastCompletedTurn?.id ?? null);
+      }
       sendJson(res, 200, {
         ...result,
         thread,
@@ -799,6 +823,7 @@ export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart,
         modelProvider: thread.modelProvider ?? result.modelProvider,
         approvalPolicy: approvalPolicy ?? result.approvalPolicy,
         networkAccess: stores.getThreadPreferences(params.id)?.networkAccess ?? stores.getSettings().networkAccess,
+        subagentJoin: subagentJoins?.snapshot(params.id) ?? null,
       });
       return;
     }

@@ -50,10 +50,11 @@ function turnOutput(turn) {
 }
 
 export class ScheduleService {
-  constructor({ stores, bridge, notifications = null, onChanged = () => {} }) {
+  constructor({ stores, bridge, notifications = null, subagentJoins = null, onChanged = () => {} }) {
     this.stores = stores;
     this.bridge = bridge;
     this.notifications = notifications;
+    this.subagentJoins = subagentJoins;
     this.onChanged = onChanged;
     this.ticking = false;
     this.stores.db.prepare(`
@@ -293,7 +294,7 @@ ${memoryContext}` : ""}`,
     }
   }
 
-  #handleBridgeEvent(event) {
+  #handleBridgeEvent(event, allowJoinDelay = true) {
     if (event.kind !== "notification") return;
     const threadId = event.params?.threadId;
     if (!threadId) return;
@@ -306,6 +307,13 @@ ${memoryContext}` : ""}`,
       return;
     }
     if (event.method !== "turn/completed") return;
+    if (allowJoinDelay && this.subagentJoins) {
+      const timer = setTimeout(() => {
+        if (!this.subagentJoins.snapshot(threadId)) this.#handleBridgeEvent(event, false);
+      }, 250);
+      timer.unref?.();
+      return;
+    }
     const turn = event.params?.turn || {};
     const succeeded = turn.status === "completed";
     this.stores.db.prepare(`

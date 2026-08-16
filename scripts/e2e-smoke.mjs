@@ -401,6 +401,8 @@ try {
   assert.equal(threadResult.approvalPolicy, "never");
   assert.equal(threadResult.networkAccess, true);
   const threadId = threadResult.thread.id;
+  const initialSubagents = await request(appBaseUrl, cookie, `/api/threads/${threadId}/subagents`);
+  assert.deepEqual(initialSubagents.data, [], "a new root thread should expose an empty descendant list");
   await request(appBaseUrl, cookie, `/api/threads/${threadId}/settings`, {
     method: "PATCH",
     body: JSON.stringify({ model: "mock-coder-fast", effort: "high", approvalPolicy: "on-request", networkAccess: true }),

@@ -43,6 +43,7 @@ export type Project = {
 
 export type ThreadItem = {
   id: string;
+  clientId?: string | null;
   turnId?: string;
   type: string;
   text?: string;
@@ -104,7 +105,7 @@ export type Thread = {
   cwd: string;
   createdAt: number;
   updatedAt: number;
-  status?: { type?: string } | string;
+  status?: { type?: string; activeFlags?: string[] } | string;
   modelProvider?: string;
   runtimeModelProvider?: string;
   model?: string;
@@ -363,4 +364,13 @@ export type AppEvent =
   | { kind: "notification"; method: string; params: Record<string, any> }
   | { kind: "notification_changed"; summary: NotificationSummary; at: number }
   | { kind: "thread_created"; projectId: string; thread: Thread; at: number }
+  | { kind: "subagent_join"; threadId: string; status: "waiting" | "finalizing" | "resumed" | "failed"; activeCount: number; rootTurnId?: string | null; turnId?: string | null; error?: string | null; at: number }
   | { kind: "heartbeat"; at: number };
+
+export type SubagentJoinState = {
+  status: "checking" | "waiting" | "finalizing";
+  activeCount: number;
+  rootTurnId?: string | null;
+  startedAt?: number;
+  error?: string | null;
+};

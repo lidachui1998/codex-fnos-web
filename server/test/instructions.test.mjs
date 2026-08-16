@@ -25,6 +25,8 @@ test("the default environment prompt identifies fnOS and destructive-operation s
   assert.match(defaultFnosInstructions, /先审计目标与影响/);
   assert.match(defaultFnosInstructions, /只操作当前项目/);
   assert.match(defaultFnosInstructions, /fnos_schedule/);
+  assert.match(defaultFnosInstructions, /等待它们进入 completed、shutdown、failed 或 interrupted 等终态/);
+  assert.match(defaultFnosInstructions, /不得在仍有子代理运行、等待批准或等待输入时提前结束主任务/);
 });
 
 test("disabled fnOS instructions are omitted", () => {

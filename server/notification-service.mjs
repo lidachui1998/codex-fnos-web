@@ -79,10 +79,11 @@ function publicNotification(row) {
 }
 
 export class NotificationService {
-  constructor({ stores, bridge, getProxy = () => null, onChanged = () => {}, fetchImpl = fetch }) {
+  constructor({ stores, bridge, getProxy = () => null, subagentJoins = null, onChanged = () => {}, fetchImpl = fetch }) {
     this.stores = stores;
     this.bridge = bridge;
     this.getProxy = getProxy;
+    this.subagentJoins = subagentJoins;
     this.onChanged = onChanged;
     this.fetchImpl = fetchImpl;
     this.pendingRequests = new Map();
@@ -368,7 +369,7 @@ export class NotificationService {
   async #send(channel, config, row) {
     const message = this.#notificationText(row);
     let body;
-    let headers = { "content-type": "application/json; charset=utf-8", "user-agent": "codex-fnos-web/0.9.8" };
+    let headers = { "content-type": "application/json; charset=utf-8", "user-agent": "codex-fnos-web/0.9.11" };
     if (channel === "hermes") {
       body = JSON.stringify({ message });
       headers = {
@@ -407,7 +408,7 @@ export class NotificationService {
     }
   }
 
-  #handleBridgeEvent(event) {
+  #handleBridgeEvent(event, allowJoinDelay = true) {
     if (event.kind === "server_request") {
       const request = event.request || {};
       if (request.method === "currentTime/read") return;
@@ -491,6 +492,13 @@ export class NotificationService {
       return;
     }
     if (event.method !== "turn/completed") return;
+    if (allowJoinDelay && this.subagentJoins) {
+      const timer = setTimeout(() => {
+        if (!this.subagentJoins.snapshot(threadId)) this.#handleBridgeEvent(event, false);
+      }, 250);
+      timer.unref?.();
+      return;
+    }
     const turn = params.turn || {};
     const active = this.#activeForThread(threadId);
     const turnId = turn.id || active?.turn_id;

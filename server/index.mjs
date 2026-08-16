@@ -29,6 +29,7 @@ import { SseHub } from "./sse-hub.mjs";
 import { ScheduleService } from "./schedule-service.mjs";
 import { SkillService } from "./skill-service.mjs";
 import { Stores } from "./stores.mjs";
+import { SubagentJoinService } from "./subagent-join-service.mjs";
 import { WorkspaceService } from "./workspace-service.mjs";
 import { discoverWorkspaceCandidates } from "./workspace-roots.mjs";
 
@@ -78,6 +79,11 @@ const bridge = new AppServerBridge({
   gatewayToken,
   stores,
 });
+const subagentJoins = new SubagentJoinService({
+  stores,
+  bridge,
+  onChanged: (state) => hub.broadcast({ kind: "subagent_join", ...state, at: Date.now() }),
+});
 const skillInstaller = new GitHubSkillInstaller({
   codexHome,
   getProxy: () => {
@@ -97,6 +103,7 @@ const skills = new SkillService(bridge, { installer: skillInstaller });
 const notifications = new NotificationService({
   stores,
   bridge,
+  subagentJoins,
   getProxy: () => {
     const id = stores.getSettings().defaultProxyId;
     return id ? stores.getProxySecret(id) : null;
@@ -107,6 +114,7 @@ const schedules = new ScheduleService({
   stores,
   bridge,
   notifications,
+  subagentJoins,
   onChanged: () => hub.broadcast({ kind: "schedule_changed", at: Date.now() }),
 });
 const conversations = new ConversationService({
@@ -137,7 +145,7 @@ function queueBridgeRestart() {
   restartTimer = setTimeout(restartWhenIdle, 400);
 }
 
-const handleApi = createApiHandler({ stores, bridge, accounts, queueBridgeRestart, appearance, updater, workspace, skills, extensions, schedules, notifications });
+const handleApi = createApiHandler({ stores, bridge, accounts, queueBridgeRestart, appearance, updater, workspace, skills, extensions, schedules, notifications, subagentJoins });
 const loginFailures = new Map();
 const loginWindowMs = 5 * 60 * 1000;
 const maxLoginFailures = 5;
@@ -279,6 +287,7 @@ server.listen(port, host, () => {
 });
 
 async function shutdown() {
+  subagentJoins.close();
   schedules.close();
   notifications.close();
   accounts.close();
