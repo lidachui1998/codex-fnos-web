@@ -13,7 +13,7 @@ const portableGhCandidates = process.platform === "win32"
   : [join(root, ".tools", "gh", "bin", "gh"), join(root, ".tools", "gh", "gh")];
 const portableGh = portableGhCandidates.find(existsSync);
 const gh = process.env.GH_BIN || portableGh || "gh";
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+const npmCli = process.env.npm_execpath;
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -57,6 +57,13 @@ function assertGhReady() {
   run(gh, ["auth", "status"]);
 }
 
+function runNpm(args) {
+  if (!npmCli || !existsSync(npmCli)) {
+    throw new Error("请通过 npm run release:github 启动发布脚本，以便复用当前 npm-cli.js");
+  }
+  run(process.execPath, [npmCli, ...args]);
+}
+
 function remoteTagExists() {
   return Boolean(output("git", ["ls-remote", "--tags", "origin", `refs/tags/${tag}`]));
 }
@@ -65,8 +72,8 @@ assertVersionMatchesManifest();
 assertGhReady();
 assertCleanWorktree();
 
-run(npm, ["run", "package:fnos"]);
-run(npm, ["run", "verify:fnos", "--", artifact]);
+runNpm(["run", "package:fnos"]);
+runNpm(["run", "verify:fnos", "--", artifact]);
 if (!existsSync(artifact)) throw new Error(`FPK 不存在：${artifact}`);
 assertCleanWorktree();
 
