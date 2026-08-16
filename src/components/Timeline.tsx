@@ -39,6 +39,8 @@ function agentStatusLabel(status: string) {
     pendingInit: "准备中",
     running: "运行中",
     inProgress: "运行中",
+    waitingApproval: "等待批准",
+    waitingInput: "等待输入",
     completed: "已完成",
     errored: "失败",
     failed: "失败",
@@ -50,7 +52,7 @@ function agentStatusLabel(status: string) {
 
 function agentDisplayName(state: AgentViewState) {
   const path = state.path?.split("/").filter(Boolean).at(-1);
-  return path || `子代理 ${state.id.slice(-8)}`;
+  return state.name?.trim() || state.role?.trim() || path || `子代理 ${state.id.slice(-8)}`;
 }
 
 function collabToolLabel(tool: string | undefined) {
@@ -138,6 +140,7 @@ type Props = {
   turnRunning?: boolean;
   activeTurnId?: string | null;
   activeTurnStartedAtMs?: number | null;
+  subagents?: AgentViewState[];
   retryProviders: RetryProviderOption[];
   retryProviderId: string;
   projectPath: string;
@@ -175,7 +178,7 @@ function itemDurationMs(item: ThreadItem) {
   return null;
 }
 
-export function Timeline({ items, streamingItemId, turnRunning, activeTurnId, activeTurnStartedAtMs, retryProviders, retryProviderId, projectPath, onOpenFile, onSuggestion, onResend, onRegenerate, onEditBranch, onOpenSubagent, readOnly = false }: Props) {
+export function Timeline({ items, streamingItemId, turnRunning, activeTurnId, activeTurnStartedAtMs, subagents: providedSubagents, retryProviders, retryProviderId, projectPath, onOpenFile, onSuggestion, onResend, onRegenerate, onEditBranch, onOpenSubagent, readOnly = false }: Props) {
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [visibleLimit, setVisibleLimit] = useState(140);
@@ -185,7 +188,8 @@ export function Timeline({ items, streamingItemId, turnRunning, activeTurnId, ac
   const renderableItems = useMemo(() => items.filter((item) => item.type !== "reasoning" || item.summary?.some((text) => text.trim())), [items]);
   const hiddenCount = Math.max(0, renderableItems.length - visibleLimit);
   const visibleItems = hiddenCount > 0 ? renderableItems.slice(hiddenCount) : renderableItems;
-  const subagents = useMemo(() => subagentStates(items, activeTurnId ?? null), [items, activeTurnId]);
+  const inferredSubagents = useMemo(() => subagentStates(items, activeTurnId ?? null), [items, activeTurnId]);
+  const subagents = providedSubagents ?? inferredSubagents;
   const runningSubagents = subagents.filter((state) => runningAgentStatuses.has(state.status));
   const completedSubagents = subagents.filter((state) => state.status === "completed" || state.status === "shutdown");
   const failedSubagents = subagents.filter((state) => ["errored", "failed", "interrupted", "notFound"].includes(state.status));
@@ -271,7 +275,7 @@ export function Timeline({ items, streamingItemId, turnRunning, activeTurnId, ac
         return null;
       })}
       {subagents.length > 0 && <section className={`subagent-live-panel ${runningSubagents.length === 0 ? "settled" : ""}`} aria-live="polite">
-        <header>{runningSubagents.length > 0 ? <LoaderCircle size={15} /> : <CheckCircle2 size={15} />}<span><strong>{runningSubagents.length > 0 ? "Codex 正在并行处理" : "子代理任务已结束"}</strong><small>{runningSubagents.length > 0 ? `${runningSubagents.length} 个运行中` : "所有子代理均已退出运行状态"} · {completedSubagents.length} 个完成{failedSubagents.length > 0 ? ` · ${failedSubagents.length} 个异常` : ""} · 点击可查看完整会话</small></span><em>{subagents.length}</em></header>
+        <header>{runningSubagents.length > 0 ? <LoaderCircle size={15} /> : <CheckCircle2 size={15} />}<span><strong>{runningSubagents.length > 0 ? turnRunning ? "主任务正在等待子代理" : "仍有子代理在后台运行" : "子代理任务已结束"}</strong><small>{runningSubagents.length > 0 ? `${runningSubagents.length} 个真实运行或等待中` : "所有子代理均已退出运行状态"} · {completedSubagents.length} 个完成{failedSubagents.length > 0 ? ` · ${failedSubagents.length} 个异常` : ""} · 点击后在右侧切换查看</small></span>{runningSubagents.length > 0 && <em>{runningSubagents.length}</em>}</header>
         <div>{subagents.map((state) => <button type="button" key={state.id} onClick={() => onOpenSubagent?.(state)} disabled={!onOpenSubagent} title="在右侧打开子代理会话"><i className={runningAgentStatuses.has(state.status) ? "running" : state.status} /><strong>{agentDisplayName(state)}</strong><small>{agentStatusLabel(state.status)}</small><ChevronRight size={12} /></button>)}</div>
       </section>}
       {turnRunning && !streamingItemId && <div className="reasoning-row active"><LoaderCircle size={14} /> 正在处理…</div>}
