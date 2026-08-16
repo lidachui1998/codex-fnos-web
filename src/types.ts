@@ -57,6 +57,18 @@ export type ThreadItem = {
   summary?: string[];
   tool?: string;
   server?: string;
+  senderThreadId?: string;
+  receiverThreadId?: string;
+  receiverThreadIds?: string[];
+  newThreadId?: string;
+  prompt?: string;
+  model?: string | null;
+  reasoningEffort?: ReasoningEffort | null;
+  agentStatus?: string | { status?: string; message?: string | null };
+  agentsStates?: Record<string, { status?: string; message?: string | null }>;
+  kind?: string;
+  agentThreadId?: string;
+  agentPath?: string;
   arguments?: unknown;
   result?: unknown;
   error?: unknown;
@@ -79,6 +91,9 @@ export type Turn = {
 
 export type Thread = {
   id: string;
+  parentThreadId?: string | null;
+  agentNickname?: string | null;
+  agentRole?: string | null;
   name?: string;
   pinned?: boolean;
   archived?: boolean;
@@ -341,6 +356,7 @@ export type Bootstrap = {
 
 export type AppEvent =
   | { kind: "connected"; bridge: BridgeState }
+  | { kind: "transport_reset" }
   | { kind: "bridge_state"; state: BridgeState }
   | { kind: "bridge_error"; message: string }
   | { kind: "server_request"; request: { id: number; method: string; params: Record<string, unknown> } }

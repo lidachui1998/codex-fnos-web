@@ -26,35 +26,100 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return data as T;
 }
 
+type PolledEvent = { cursor: number; event: unknown };
+type PollResponse = { events: PolledEvent[]; nextCursor: number; reset: boolean };
+
+let preferPolling = false;
+let lastEventCursor: number | null = null;
+
+async function loadEventCheckpoint(signal: AbortSignal) {
+  const data = await api<PollResponse>("/api/events/poll", { cache: "no-store", signal });
+  if (Number.isSafeInteger(data.nextCursor) && data.nextCursor >= 0) lastEventCursor = data.nextCursor;
+}
+
+function waitForEventSource(onEvent: (event: unknown) => void, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (typeof EventSource === "undefined") {
+      reject(new Error("当前 WebView 不支持 EventSource"));
+      return;
+    }
+    const query = lastEventCursor === null ? "" : `?cursor=${encodeURIComponent(lastEventCursor)}`;
+    const source = new EventSource(`/events${query}`, { withCredentials: true });
+    let connected = false;
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("SSE 首包超时"));
+    }, 4_500);
+    const cleanup = () => {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", abort);
+      source.close();
+    };
+    const abort = () => {
+      cleanup();
+      resolve();
+    };
+    source.onmessage = (message) => {
+      connected = true;
+      clearTimeout(timeout);
+      const cursor = message.lastEventId.trim() ? Number(message.lastEventId) : null;
+      if (cursor !== null && Number.isSafeInteger(cursor) && cursor >= 0) lastEventCursor = cursor;
+      try {
+        onEvent(JSON.parse(message.data));
+      } catch {
+        // Ignore malformed keepalive data.
+      }
+    };
+    source.onerror = () => {
+      cleanup();
+      reject(new Error(connected ? "SSE 连接已断开" : "SSE 连接失败"));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+  });
+}
+
+async function pollEvents(onEvent: (event: unknown) => void, signal: AbortSignal) {
+  let cursor = lastEventCursor;
+  while (!signal.aborted) {
+    const query = cursor === null ? "" : `?cursor=${encodeURIComponent(cursor)}`;
+    const response = await fetch(`/api/events/poll${query}`, {
+      cache: "no-store",
+      credentials: "same-origin",
+      signal,
+    });
+    const data = await response.json().catch(() => ({})) as Partial<PollResponse> & { error?: { message?: string; details?: unknown } };
+    if (!response.ok) {
+      throw new ApiError(data.error?.message ?? `事件轮询失败 (${response.status})`, response.status, data.error?.details);
+    }
+    if (data.reset) onEvent({ kind: "transport_reset" });
+    for (const entry of data.events ?? []) {
+      if (!Number.isSafeInteger(entry.cursor) || entry.cursor < 0) continue;
+      cursor = Math.max(cursor ?? 0, entry.cursor);
+      lastEventCursor = cursor;
+      onEvent(entry.event);
+    }
+    if (Number.isSafeInteger(data.nextCursor) && Number(data.nextCursor) >= 0) {
+      cursor = Math.max(cursor ?? 0, Number(data.nextCursor));
+      lastEventCursor = cursor;
+    }
+  }
+}
+
 export async function connectEvents(
   onEvent: (event: unknown) => void,
   signal: AbortSignal,
 ) {
-  const response = await fetch("/events", {
-    credentials: "same-origin",
-    signal,
-  });
-  if (!response.ok || !response.body) throw new ApiError("事件流连接失败", response.status);
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  while (!signal.aborted) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let boundary = buffer.indexOf("\n\n");
-    while (boundary >= 0) {
-      const block = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-      const data = block.split(/\r?\n/).find((line) => line.startsWith("data:"));
-      if (data) {
-        try {
-          onEvent(JSON.parse(data.slice(5).trim()));
-        } catch {
-          // Ignore malformed keepalive data.
-        }
-      }
-      boundary = buffer.indexOf("\n\n");
+  if (!preferPolling) {
+    try {
+      if (lastEventCursor === null) await loadEventCheckpoint(signal);
+      await waitForEventSource(onEvent, signal);
+      if (signal.aborted) return;
+    } catch (reason) {
+      if (signal.aborted) return;
+      preferPolling = true;
+      if (reason instanceof ApiError && reason.status === 401) throw reason;
     }
   }
+  await pollEvents(onEvent, signal);
 }

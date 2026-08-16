@@ -6,7 +6,7 @@ import { ApprovalCard } from "./components/ApprovalCard";
 import { LoginScreen } from "./components/LoginScreen";
 import { ModelPicker } from "./components/ModelPicker";
 import { findSkillMention, matchingPlugins, matchingSkills, SkillMentionMenu, type ProjectFileMention, type SkillMention } from "./components/SkillMentionMenu";
-import { Timeline } from "./components/Timeline";
+import { Timeline, type AgentViewState } from "./components/Timeline";
 import { ThreadMenu } from "./components/ThreadMenu";
 import type { AppEvent, ApprovalPolicy, Bootstrap, NotificationSummary, PluginSummary, PluginsResult, Project, ReasoningEffort, Skill, SkillsResult, Thread, ThreadItem, Turn } from "./types";
 
@@ -17,6 +17,7 @@ const ProjectDialog = lazy(() => import("./components/ProjectDialog").then((modu
 const ScheduledTasksDialog = lazy(() => import("./components/ScheduledTasksDialog").then((module) => ({ default: module.ScheduledTasksDialog })));
 const SettingsDialog = lazy(() => import("./components/SettingsDialog").then((module) => ({ default: module.SettingsDialog })));
 const SkillsDialog = lazy(() => import("./components/SkillsDialog").then((module) => ({ default: module.SkillsDialog })));
+const SubagentPanel = lazy(() => import("./components/SubagentPanel").then((module) => ({ default: module.SubagentPanel })));
 const WorkspacePanel = lazy(() => import("./components/WorkspacePanel").then((module) => ({ default: module.WorkspacePanel })));
 
 function upsertItem(items: ThreadItem[], next: ThreadItem) {
@@ -231,6 +232,7 @@ export default function App() {
   const [threadSearch, setThreadSearch] = useState("");
   const [threadsCollapsed, setThreadsCollapsed] = useState(() => localStorage.getItem("codex-fnos-threads-collapsed") === "true");
   const [workspacePanel, setWorkspacePanel] = useState(false);
+  const [selectedSubagent, setSelectedSubagent] = useState<AgentViewState | null>(null);
   const [workspaceFileRequest, setWorkspaceFileRequest] = useState<{ path: string; nonce: number } | null>(null);
   const [scrollPosition, setScrollPosition] = useState({ atTop: true, atBottom: true });
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
@@ -259,6 +261,8 @@ export default function App() {
   const attachmentsRef = useRef<ChatAttachment[]>([]);
   const selectedSkillsRef = useRef<Skill[]>([]);
   const pluginsLoadedRef = useRef(false);
+
+  useEffect(() => setSelectedSubagent(null), [selectedThreadId]);
 
   const selectedProject = bootstrap?.projects.find((project) => project.id === selectedProjectId) ?? null;
   const selectedThread = threads.find((thread) => thread.id === selectedThreadId) ?? null;
@@ -570,6 +574,10 @@ export default function App() {
 
   const handleEvent = useCallback((raw: unknown) => {
     const event = raw as AppEvent;
+    if (event.kind === "transport_reset") {
+      window.location.reload();
+      return;
+    }
     if (event.kind === "bridge_state") {
       setBootstrap((current) => current ? { ...current, bridge: event.state } : current);
       if (event.state.status === "ready") void loadBootstrap();
@@ -996,7 +1004,7 @@ export default function App() {
     activeTurnIdRef.current = null;
     setFatalError("");
     try {
-      const result = await api<{ thread: Thread; model: string; modelProvider: string; reasoningEffort?: ReasoningEffort | null; approvalPolicy: ApprovalPolicy; networkAccess?: boolean }>(`/api/threads/${thread.id}/resume`, { method: "POST", body: "{}", signal: controller.signal });
+      const result = await api<{ thread: Thread; activeTurnId?: string | null; activeTurnStartedAt?: number | null; model: string; modelProvider: string; reasoningEffort?: ReasoningEffort | null; approvalPolicy: ApprovalPolicy; networkAccess?: boolean }>(`/api/threads/${thread.id}/resume`, { method: "POST", body: "{}", signal: controller.signal });
       if (requestId !== openThreadRequestRef.current || selectedThreadRef.current !== thread.id) return;
       const resumedThread = { ...result.thread, model: result.model, modelProvider: result.modelProvider, reasoningEffort: result.reasoningEffort, approvalPolicy: result.approvalPolicy, networkAccess: result.networkAccess ?? result.thread.networkAccess ?? bootstrap?.settings.networkAccess ?? true };
       setThreads((current) => current.some((item) => item.id === thread.id)
@@ -1012,9 +1020,18 @@ export default function App() {
         attachments: cached?.attachments ?? [],
         selectedSkills: cached?.selectedSkills ?? [],
       });
-      const resumedRunning = typeof resumedThread.status === "object" && resumedThread.status?.type === "active";
+      const activeTurn = [...(resumedThread.turns ?? [])].reverse().find((turn) => turn.status === "inProgress");
+      const restoredTurnId = result.activeTurnId ?? activeTurn?.id ?? null;
+      const resumedRunning = Boolean(restoredTurnId) || (typeof resumedThread.status === "object" && resumedThread.status?.type === "active");
+      const restoredStartedAtMs = Number.isFinite(result.activeTurnStartedAt)
+        ? Number(result.activeTurnStartedAt) * 1000
+        : Number.isFinite(activeTurn?.startedAt) ? Number(activeTurn?.startedAt) * 1000 : resumedRunning ? Date.now() : null;
       turnRunningRef.current = resumedRunning;
       setTurnRunning(resumedRunning);
+      activeTurnIdRef.current = restoredTurnId;
+      setActiveTurnId(restoredTurnId);
+      activeTurnStartedAtRef.current = restoredStartedAtMs;
+      setActiveTurnStartedAtMs(restoredStartedAtMs);
       const providerId = threadProviderId(resumedThread);
       const saved = savedModelSelection(projectOverride?.id ?? selectedProject?.id ?? null, result.thread.id);
       setSelectedProviderId(providerId);
@@ -1478,7 +1495,7 @@ export default function App() {
     : undefined;
 
   return (
-    <div className={`app-shell ${threadsCollapsed ? "threads-collapsed" : ""} ${workspacePanel && selectedProject ? "workspace-open" : ""} ${shellStyle ? "has-background" : ""}`} style={shellStyle}>
+    <div className={`app-shell ${threadsCollapsed ? "threads-collapsed" : ""} ${workspacePanel && selectedProject ? "workspace-open" : ""} ${selectedSubagent && selectedProject ? "subagent-open" : ""} ${shellStyle ? "has-background" : ""}`} style={shellStyle}>
       <aside className={`projects-panel ${mobileProjects ? "mobile-open" : ""}`}>
         <header className="brand-header">
           <div className="brand"><div className="brand-mark"><img src="/app-icon.png" alt="" /></div><div><strong>Codex</strong><small>飞牛工作台</small></div></div>
@@ -1547,7 +1564,7 @@ export default function App() {
             <button className="icon-button" title="插件市场与已安装插件" aria-label="插件" onClick={() => { setMobileToolsOpen(false); setPluginsDialog(true); }}><Boxes size={17} /></button>
             <button className="icon-button" title="定时任务" aria-label="定时任务" onClick={() => { setMobileToolsOpen(false); setScheduledTasksDialog(true); }}><CalendarClock size={17} /></button>
             <button className="icon-button notification-button" title="通知中心" aria-label={`通知中心，${notificationSummary.unread} 条未读`} onClick={() => { setMobileToolsOpen(false); setNotificationDialog(true); }}><Bell size={17} />{notificationSummary.unread > 0 && <span>{notificationSummary.unread > 99 ? "99+" : notificationSummary.unread}</span>}</button>
-            <button className={`icon-button ${workspacePanel ? "active-tool" : ""}`} disabled={!selectedProject} title="项目文件和改动" aria-label="项目文件和改动" onClick={() => { setMobileToolsOpen(false); setWorkspacePanel((value) => !value); }}><Code2 size={17} /></button>
+            <button className={`icon-button ${workspacePanel ? "active-tool" : ""}`} disabled={!selectedProject} title="项目文件和改动" aria-label="项目文件和改动" onClick={() => { setMobileToolsOpen(false); setSelectedSubagent(null); setWorkspacePanel((value) => !value); }}><Code2 size={17} /></button>
             <button className="icon-button header-settings-button" title="设置" aria-label="设置" onClick={() => { setMobileToolsOpen(false); setSettingsDialog(true); }}><Settings size={17} /></button>
             <button className="icon-button danger" disabled={!selectedThread || turnRunning} title="删除当前会话" aria-label="删除当前会话" onClick={() => { setMobileToolsOpen(false); if (selectedThread) void deleteThread(selectedThread); }}><Trash2 size={17} /></button>
           </div>
@@ -1561,7 +1578,7 @@ export default function App() {
             ) : (
               <div className="conversation-inner">
                 {threadLoading && items.length === 0 && <div className="conversation-loading" role="status"><span className="spin" />正在载入聊天记录…</div>}
-                <Timeline key={selectedThreadId ?? "empty"} items={items} streamingItemId={streamingItemId} turnRunning={turnRunning} activeTurnStartedAtMs={activeTurnStartedAtMs} retryProviders={retryProviders} retryProviderId={retryProviderId} projectPath={selectedProject.path} onOpenFile={openWorkspaceFile} onSuggestion={(text) => setComposer(text)} onResend={(item, providerId) => void resendUserMessage(item, providerId)} onRegenerate={regenerateMessage} onEditBranch={(item) => void editAndBranch(item)} />
+                <Timeline key={selectedThreadId ?? "empty"} items={items} streamingItemId={streamingItemId} turnRunning={turnRunning} activeTurnStartedAtMs={activeTurnStartedAtMs} retryProviders={retryProviders} retryProviderId={retryProviderId} projectPath={selectedProject.path} onOpenFile={openWorkspaceFile} onSuggestion={(text) => setComposer(text)} onResend={(item, providerId) => void resendUserMessage(item, providerId)} onRegenerate={regenerateMessage} onEditBranch={(item) => void editAndBranch(item)} onOpenSubagent={(agent) => { setWorkspacePanel(false); setSelectedSubagent(agent); }} />
                 {pendingRequests.filter((request) => !request.params.threadId || request.params.threadId === selectedThreadId).map((request) => <ApprovalCard key={request.id} request={request} onResolved={(id) => setPendingRequests((current) => current.filter((item) => item.id !== id))} />)}
               </div>
             )}
@@ -1586,6 +1603,7 @@ export default function App() {
       </main>
 
       <Suspense fallback={null}>
+        {selectedSubagent && selectedProject && <SubagentPanel agent={selectedSubagent} projectPath={selectedProject.path} onClose={() => setSelectedSubagent(null)} onOpenFile={openWorkspaceFile} onOpenSubagent={setSelectedSubagent} />}
         {workspacePanel && selectedProject && <WorkspacePanel project={selectedProject} items={items} requestedFile={workspaceFileRequest} onClose={() => setWorkspacePanel(false)} />}
         {projectDialog && <ProjectDialog open bootstrap={bootstrap} onClose={() => setProjectDialog(false)} onCreated={loadBootstrap} />}
         {globalSearchOpen && <GlobalSearchDialog open onClose={() => setGlobalSearchOpen(false)} onSelect={selectSearchResult} />}

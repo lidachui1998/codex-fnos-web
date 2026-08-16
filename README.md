@@ -5,14 +5,14 @@
   <p>原生飞牛桌面体验 · 实时对话控制 · 后台定时任务 · Skills 与插件 · 多模型供应商</p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-0.9.5-0f9f7f?style=flat-square" alt="Version 0.9.5">
+    <img src="https://img.shields.io/badge/version-0.9.7-0f9f7f?style=flat-square" alt="Version 0.9.7">
     <img src="https://img.shields.io/badge/fnOS-x86__64-1f2937?style=flat-square" alt="fnOS x86_64">
     <img src="https://img.shields.io/badge/Node.js-24%2B-3c873a?style=flat-square" alt="Node.js 24+">
-    <img src="https://img.shields.io/badge/tests-77%20passed-0f9f7f?style=flat-square" alt="77 tests passed">
+    <img src="https://img.shields.io/badge/tests-84%20passed-0f9f7f?style=flat-square" alt="84 tests passed">
   </p>
 
   <p>
-    <a href="https://github.com/lidachui1998/codex-fnos-web/releases/tag/v0.9.5"><strong>下载 v0.9.5 FPK</strong></a>
+    <a href="https://github.com/lidachui1998/codex-fnos-web/releases/latest"><strong>下载最新 FPK</strong></a>
     ·
     <a href="#快速开始">快速开始</a>
     ·
@@ -40,11 +40,12 @@ Codex 飞牛工作台把这些环节放进同一个 fnOS 应用：
 
 ## 核心能力
 
-| 能力 | 0.9.5 中的实现 |
+| 能力 | 0.9.7 中的实现 |
 | --- | --- |
 | 实时对话控制 | 流式回答、中断、官方 `turn/steer` 立即追加、等待队列自动发送；队列项也可手动提前发送 |
+| 飞牛 App 兼容 | 标准 SSE 实时通道；嵌入式 WebView 首包异常时自动切换带游标补发的 HTTP 长轮询，页面重开可恢复进行中的回复 |
 | 会话管理 | 创建、恢复、重命名、置顶、归档、删除、全局搜索、重新发送、重新生成与编辑并分支 |
-| 新会话与子代理 | Codex 可通过工作台入口显式创建新会话；启用原生子代理能力，由 Codex 根据任务决定是否委派 |
+| 新会话与子代理 | Codex 可通过工作台入口显式创建新会话；原生子代理由 Codex 按任务自主委派，准确区分运行、完成与异常，点击可在右侧查看完整子会话 |
 | fnOS 后台自动化 | 每隔一段时间、每天或每周执行；每次运行保存为新会话，支持桌面 Codex 自动化导入 |
 | NAS 文件工作流 | 项目文件、Git diff 与常见产物预览；调用官方 `openFile` / `openFileManager` 打开或定位文件 |
 | Skills 与插件 | 搜索、预览、智能调用、`@` 强制指定；支持 GitHub、`SKILL.md`、ZIP 与标准插件包导入 |

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildTurnInput, readApprovalPolicy, readReasoningEffort, readRetryProvider } from "../api-router.mjs";
+import { buildTurnInput, findActiveTurn, readApprovalPolicy, readReasoningEffort, readRetryProvider } from "../api-router.mjs";
 
 test("turn input carries text files and images into app-server input", () => {
   assert.deepEqual(buildTurnInput({
@@ -59,4 +59,14 @@ test("retry provider must be an explicitly selected enabled provider", () => {
   });
   assert.throws(() => readRetryProvider({ providerId: "disabled-api" }, providers), /不存在或未启用/);
   assert.throws(() => readRetryProvider({ providerId: "unselected-api" }, providers), /不存在或未启用/);
+});
+
+test("resume recovery finds the current in-progress turn", () => {
+  const active = { id: "turn-active", status: "inProgress", items: [] };
+  assert.equal(findActiveTurn({ turns: [
+    { id: "turn-complete", status: "completed", items: [] },
+    active,
+  ] }), active);
+  assert.equal(findActiveTurn({ turns: [{ id: "turn-failed", status: "failed", items: [] }] }), null);
+  assert.equal(findActiveTurn(null), null);
 });

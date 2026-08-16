@@ -239,7 +239,26 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (req.method === "GET" && url.pathname === "/events") {
-      hub.connect(req, res, { bridge: bridge.snapshot() });
+      const rawCursor = url.searchParams.get("cursor") ?? req.headers["last-event-id"] ?? null;
+      const cursor = rawCursor === null ? null : Number(rawCursor);
+      if (cursor !== null && (!Number.isSafeInteger(cursor) || cursor < 0)) {
+        sendError(res, 400, "事件游标无效");
+        return;
+      }
+      hub.connect(req, res, { bridge: bridge.snapshot() }, cursor);
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/events/poll") {
+      const rawCursor = url.searchParams.get("cursor");
+      const cursor = rawCursor === null ? null : Number(rawCursor);
+      if (cursor !== null && (!Number.isSafeInteger(cursor) || cursor < 0)) {
+        sendError(res, 400, "事件游标无效");
+        return;
+      }
+      const controller = new AbortController();
+      res.once("close", () => controller.abort());
+      const result = await hub.poll(cursor, controller.signal);
+      if (result && !res.writableEnded) sendJson(res, 200, result);
       return;
     }
     if (url.pathname.startsWith("/api/")) {
@@ -263,6 +282,7 @@ async function shutdown() {
   schedules.close();
   notifications.close();
   accounts.close();
+  hub.close();
   await bridge.stop();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(1), 5000).unref();

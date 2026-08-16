@@ -107,7 +107,11 @@ mkdirSync(stageRoot, { recursive: true });
 cpSync(template, stage, { recursive: true });
 
 const manifestPath = join(stage, "manifest");
-writeFileSync(manifestPath, readFileSync(manifestPath, "utf8").replace(/^version=.*$/m, `version=${pkg.version}`), "utf8");
+writeFileSync(
+  manifestPath,
+  readFileSync(manifestPath, "utf8").replace(/\r\n/g, "\n").replace(/^version=.*$/m, `version=${pkg.version}`),
+  "utf8",
+);
 
 const serverDir = join(stage, "app", "server");
 mkdirSync(join(serverDir, "server"), { recursive: true });

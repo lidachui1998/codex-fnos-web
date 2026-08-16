@@ -24,6 +24,11 @@ function filterThreadsByCwd(result, cwd) {
   };
 }
 
+function findActiveTurn(thread) {
+  if (!Array.isArray(thread?.turns)) return null;
+  return [...thread.turns].reverse().find((turn) => turn?.status === "inProgress") ?? null;
+}
+
 const reasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 const imageDataUrl = /^data:image\/(png|jpeg|webp|gif);base64,([a-z\d+/=]+)$/i;
 const threadSourceKinds = [
@@ -158,7 +163,7 @@ export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart,
         }
       }
       sendJson(res, 200, {
-        version: "0.9.5",
+        version: "0.9.7",
         providers: stores.listProviders(),
         proxies: stores.listProxies(),
         projects: stores.listProjects(),
@@ -784,9 +789,12 @@ export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart,
         await bridge.request("thread/settings/update", { threadId: params.id, approvalPolicy });
       }
       const thread = decorateThread({ ...result.thread, model: result.model, modelProvider: result.modelProvider ?? result.thread?.modelProvider });
+      const activeTurn = findActiveTurn(thread);
       sendJson(res, 200, {
         ...result,
         thread,
+        activeTurnId: activeTurn?.id ?? null,
+        activeTurnStartedAt: Number.isFinite(activeTurn?.startedAt) ? activeTurn.startedAt : null,
         model: thread.model ?? result.model,
         modelProvider: thread.modelProvider ?? result.modelProvider,
         approvalPolicy: approvalPolicy ?? result.approvalPolicy,
@@ -1013,4 +1021,4 @@ export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart,
   };
 }
 
-export { buildTurnInput, readApprovalPolicy, readReasoningEffort, readRetryProvider };
+export { buildTurnInput, findActiveTurn, readApprovalPolicy, readReasoningEffort, readRetryProvider };

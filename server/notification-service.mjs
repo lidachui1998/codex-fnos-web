@@ -368,7 +368,7 @@ export class NotificationService {
   async #send(channel, config, row) {
     const message = this.#notificationText(row);
     let body;
-    let headers = { "content-type": "application/json; charset=utf-8", "user-agent": "codex-fnos-web/0.9.5" };
+    let headers = { "content-type": "application/json; charset=utf-8", "user-agent": "codex-fnos-web/0.9.7" };
     if (channel === "hermes") {
       body = JSON.stringify({ message });
       headers = {

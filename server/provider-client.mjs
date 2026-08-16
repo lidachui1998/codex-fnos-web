@@ -51,7 +51,7 @@ export async function testProxy(proxy, target = "https://api.openai.com/v1/model
   try {
     const response = await fetch(target, {
       agent: createProviderAgent(proxy),
-      headers: { "user-agent": "codex-fnos-web/0.9.5" },
+      headers: { "user-agent": "codex-fnos-web/0.9.7" },
       redirect: "manual",
       signal: AbortSignal.timeout(12_000),
     });
