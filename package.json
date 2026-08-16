@@ -1,6 +1,6 @@
 {
   "name": "codex-fnos-web",
-  "version": "0.9.7",
+  "version": "0.9.8",
   "private": true,
   "type": "module",
   "engines": {
@@ -10,7 +10,7 @@
     "dev": "concurrently -k -n web,server -c cyan,magenta \"vite --host 0.0.0.0\" \"node --watch server/index.mjs\"",
     "build": "tsc -b && vite build",
     "start": "node server/index.mjs",
-    "test": "node --test server/test/access-control.test.mjs server/test/account-service.test.mjs server/test/automation-import.test.mjs server/test/api-router-input.test.mjs server/test/app-server-bridge.test.mjs server/test/appearance-service.test.mjs server/test/chat-adapter.test.mjs server/test/codex-updater.test.mjs server/test/database.test.mjs server/test/frame-policy.test.mjs server/test/github-skill-installer.test.mjs server/test/global-extension-service.test.mjs server/test/instructions.test.mjs server/test/notification-service.test.mjs server/test/plugin-install.test.mjs server/test/provider-client.test.mjs server/test/schedule-mcp.test.mjs server/test/schedule-service.test.mjs server/test/skill-service.test.mjs server/test/sse-hub.test.mjs server/test/stores.test.mjs server/test/workspace-roots.test.mjs server/test/workspace-service.test.mjs",
+    "test": "node --test server/test/access-control.test.mjs server/test/account-service.test.mjs server/test/automation-import.test.mjs server/test/api-router-input.test.mjs server/test/app-server-bridge.test.mjs server/test/appearance-service.test.mjs server/test/chat-adapter.test.mjs server/test/codex-updater.test.mjs server/test/database.test.mjs server/test/frame-policy.test.mjs server/test/github-skill-installer.test.mjs server/test/global-extension-service.test.mjs server/test/instructions.test.mjs server/test/notification-service.test.mjs server/test/plugin-install.test.mjs server/test/provider-client.test.mjs server/test/schedule-mcp.test.mjs server/test/schedule-service.test.mjs server/test/skill-service.test.mjs server/test/sse-hub.test.mjs server/test/stores.test.mjs server/test/subagent-state.test.mjs server/test/workspace-roots.test.mjs server/test/workspace-service.test.mjs",
     "test:e2e": "node scripts/e2e-smoke.mjs",
     "package:fnos": "npm run build && node scripts/build-fpk.mjs",
     "verify:fnos": "node scripts/verify-fpk.mjs"

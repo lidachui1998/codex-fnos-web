@@ -181,7 +181,7 @@ export class CodexUpdater {
   async #json(url) {
     const response = await fetch(url, {
       agent: createProviderAgent(this.getProxy?.()),
-      headers: { accept: "application/json", "user-agent": "codex-fnos-web/0.9.7" },
+      headers: { accept: "application/json", "user-agent": "codex-fnos-web/0.9.8" },
       signal: AbortSignal.timeout(20_000),
     });
     const body = await response.json().catch(() => ({}));
@@ -192,7 +192,7 @@ export class CodexUpdater {
   async #download(url, output, integrity) {
     const response = await fetch(url, {
       agent: createProviderAgent(this.getProxy?.()),
-      headers: { "user-agent": "codex-fnos-web/0.9.7" },
+      headers: { "user-agent": "codex-fnos-web/0.9.8" },
       signal: AbortSignal.timeout(10 * 60_000),
     });
     if (!response.ok || !response.body) throw new Error(`官方 Codex 下载返回 HTTP ${response.status}`);

@@ -3,7 +3,10 @@ import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ThreadItem } from "../types";
+import { collabAgentStates, runningAgentStatuses, subagentStates, type AgentViewState } from "../subagents";
 import { changeKindName, DiffView } from "./DiffView";
+
+export type { AgentViewState } from "../subagents";
 
 function workspaceFileHref(href: string | undefined, projectPath: string) {
   if (!href) return null;
@@ -31,10 +34,6 @@ function userImages(item: ThreadItem) {
     .map((part) => part.url as string) ?? [];
 }
 
-export type AgentViewState = { id: string; path?: string; status: string; message?: string | null };
-
-const runningAgentStatuses = new Set(["pendingInit", "running", "inProgress"]);
-
 function agentStatusLabel(status: string) {
   return ({
     pendingInit: "准备中",
@@ -52,48 +51,6 @@ function agentStatusLabel(status: string) {
 function agentDisplayName(state: AgentViewState) {
   const path = state.path?.split("/").filter(Boolean).at(-1);
   return path || `子代理 ${state.id.slice(-8)}`;
-}
-
-function collabAgentStates(item: ThreadItem) {
-  const states = Object.entries(item.agentsStates ?? {}).map(([id, state]) => ({
-    id,
-    status: state?.status || (item.status === "inProgress" ? "running" : "completed"),
-    message: state?.message,
-  }));
-  if (states.length > 0) return states;
-  const receiverIds = item.receiverThreadIds?.length
-    ? item.receiverThreadIds
-    : [item.receiverThreadId, item.newThreadId].filter((id): id is string => Boolean(id));
-  const legacyStatus = typeof item.agentStatus === "string" ? item.agentStatus : item.agentStatus?.status;
-  return receiverIds.map((id) => ({
-    id,
-    status: legacyStatus || (item.status === "inProgress" || item.tool === "spawnAgent" ? "running" : item.status || "completed"),
-    message: typeof item.agentStatus === "object" ? item.agentStatus.message : null,
-  }));
-}
-
-export function subagentStates(items: ThreadItem[], turnRunning = false) {
-  const states = new Map<string, AgentViewState>();
-  for (const item of items) {
-    if (item.type === "subAgentActivity" && item.agentThreadId) {
-      const previous = states.get(item.agentThreadId);
-      states.set(item.agentThreadId, {
-        id: item.agentThreadId,
-        path: item.agentPath || previous?.path,
-        status: item.kind === "interrupted" ? "interrupted" : previous?.status && !runningAgentStatuses.has(previous.status) ? previous.status : "running",
-        message: previous?.message,
-      });
-      continue;
-    }
-    if (item.type !== "collabToolCall") continue;
-    for (const state of collabAgentStates(item)) {
-      const previous = states.get(state.id);
-      states.set(state.id, { ...previous, ...state });
-    }
-  }
-  return [...states.values()].map((state) => !turnRunning && runningAgentStatuses.has(state.status)
-    ? { ...state, status: "completed" }
-    : state);
 }
 
 function collabToolLabel(tool: string | undefined) {
@@ -179,6 +136,7 @@ type Props = {
   items: ThreadItem[];
   streamingItemId?: string | null;
   turnRunning?: boolean;
+  activeTurnId?: string | null;
   activeTurnStartedAtMs?: number | null;
   retryProviders: RetryProviderOption[];
   retryProviderId: string;
@@ -217,7 +175,7 @@ function itemDurationMs(item: ThreadItem) {
   return null;
 }
 
-export function Timeline({ items, streamingItemId, turnRunning, activeTurnStartedAtMs, retryProviders, retryProviderId, projectPath, onOpenFile, onSuggestion, onResend, onRegenerate, onEditBranch, onOpenSubagent, readOnly = false }: Props) {
+export function Timeline({ items, streamingItemId, turnRunning, activeTurnId, activeTurnStartedAtMs, retryProviders, retryProviderId, projectPath, onOpenFile, onSuggestion, onResend, onRegenerate, onEditBranch, onOpenSubagent, readOnly = false }: Props) {
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [visibleLimit, setVisibleLimit] = useState(140);
@@ -227,7 +185,7 @@ export function Timeline({ items, streamingItemId, turnRunning, activeTurnStarte
   const renderableItems = useMemo(() => items.filter((item) => item.type !== "reasoning" || item.summary?.some((text) => text.trim())), [items]);
   const hiddenCount = Math.max(0, renderableItems.length - visibleLimit);
   const visibleItems = hiddenCount > 0 ? renderableItems.slice(hiddenCount) : renderableItems;
-  const subagents = useMemo(() => subagentStates(items, Boolean(turnRunning)), [items, turnRunning]);
+  const subagents = useMemo(() => subagentStates(items, activeTurnId ?? null), [items, activeTurnId]);
   const runningSubagents = subagents.filter((state) => runningAgentStatuses.has(state.status));
   const completedSubagents = subagents.filter((state) => state.status === "completed" || state.status === "shutdown");
   const failedSubagents = subagents.filter((state) => ["errored", "failed", "interrupted", "notFound"].includes(state.status));

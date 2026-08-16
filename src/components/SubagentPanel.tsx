@@ -60,6 +60,7 @@ export function SubagentPanel({ agent, projectPath, onClose, onOpenFile, onOpenS
   const items = useMemo(() => readOnlyTranscript(thread), [thread]);
   const status = panelStatus(agent, thread);
   const running = status === "running" || status === "pendingInit" || status === "inProgress";
+  const activeTurnId = [...(thread?.turns ?? [])].reverse().find((turn) => turn.status === "inProgress")?.id ?? null;
 
   useEffect(() => {
     let cancelled = false;
@@ -110,6 +111,7 @@ export function SubagentPanel({ agent, projectPath, onClose, onOpenFile, onOpenS
         {!loading && !error && items.length > 0 && <Timeline
           items={items}
           turnRunning={running}
+          activeTurnId={activeTurnId}
           retryProviders={[]}
           retryProviderId=""
           projectPath={thread?.cwd || projectPath}

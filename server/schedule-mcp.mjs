@@ -222,7 +222,7 @@ export function handleScheduleMcpRequest(store, message, extensions, conversatio
     return {
       protocolVersion: message.params?.protocolVersion || "2025-06-18",
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: "fnos-workbench", version: "0.9.7" },
+      serverInfo: { name: "fnos-workbench", version: "0.9.8" },
     };
   }
   if (message.method === "ping") return {};
