@@ -1,15 +1,20 @@
-import { AlertTriangle, Bot, CheckCircle2, ChevronRight, LoaderCircle, RefreshCw, X } from "lucide-react";
+import { AlertTriangle, Bot, CheckCircle2, ChevronRight, CornerDownRight, LoaderCircle, RefreshCw, RotateCcw, Send, Square, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { createClientId } from "../client-id";
 import { runningAgentStatuses, threadAgentStatus, type AgentViewState } from "../subagents";
-import type { Thread, ThreadItem } from "../types";
+import type { PendingServerRequest, SubagentJoinState, Thread, ThreadItem } from "../types";
+import { ApprovalCard } from "./ApprovalCard";
 import { Timeline } from "./Timeline";
+import { UserInputCard } from "./UserInputCard";
 
 type Props = {
   rootThreadId: string;
   agent: AgentViewState;
   agents: AgentViewState[];
   projectPath: string;
+  pendingRequests: PendingServerRequest[];
+  onRequestResolved: (id: number) => void;
   onClose: () => void;
   onOpenFile: (path: string) => void;
   onOpenSubagent: (agent: AgentViewState) => void;
@@ -54,12 +59,15 @@ function readOnlyTranscript(thread?: Thread | null) {
   }) ?? [];
 }
 
-export function SubagentPanel({ rootThreadId, agent, agents, projectPath, onClose, onOpenFile, onOpenSubagent }: Props) {
+export function SubagentPanel({ rootThreadId, agent, agents, projectPath, pendingRequests, onRequestResolved, onClose, onOpenFile, onOpenSubagent }: Props) {
   const [selectedAgentId, setSelectedAgentId] = useState(agent.id);
   const [thread, setThread] = useState<Thread | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
+  const [prompt, setPrompt] = useState("");
+  const [sending, setSending] = useState(false);
+  const [actionError, setActionError] = useState("");
   const visibleAgents = useMemo(() => agents.some((item) => item.id === agent.id) ? agents : [agent, ...agents], [agent, agents]);
   const selectedAgent = visibleAgents.find((item) => item.id === selectedAgentId) ?? agent;
   const items = useMemo(() => readOnlyTranscript(thread), [thread]);
@@ -68,8 +76,10 @@ export function SubagentPanel({ rootThreadId, agent, agents, projectPath, onClos
   const runningCount = visibleAgents.filter((item) => runningAgentStatuses.has(item.status)).length;
   const failedCount = visibleAgents.filter((item) => ["failed", "errored", "interrupted", "notFound"].includes(item.status)).length;
   const activeTurnId = [...(thread?.turns ?? [])].reverse().find((turn) => turn.status === "inProgress")?.id ?? null;
+  const selectedRequests = pendingRequests.filter((request) => request.params?.threadId === selectedAgent.id);
+  const waitingForRequest = selectedRequests.length > 0;
 
-  useEffect(() => setSelectedAgentId(agent.id), [agent.id]);
+  useEffect(() => { setSelectedAgentId(agent.id); setPrompt(""); setActionError(""); }, [agent.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -108,6 +118,91 @@ export function SubagentPanel({ rootThreadId, agent, agents, projectPath, onClos
     onOpenSubagent(next);
   }
 
+  async function queueFollowUp(text: string, projectId: string) {
+    await api(`/api/threads/${selectedAgent.id}/outbox`, {
+      method: "POST",
+      body: JSON.stringify({
+        text,
+        projectId,
+        approvalPolicy: thread?.approvalPolicy,
+        networkAccess: thread?.networkAccess,
+        skills: [],
+        attachments: [],
+      }),
+    });
+  }
+
+  async function sendFollowUp(override?: string) {
+    const text = String(override ?? prompt).trim();
+    const projectId = thread?.projectId;
+    if (!text || !projectId || sending || waitingForRequest) return;
+    setSending(true);
+    setActionError("");
+    try {
+      let targetTurnId = activeTurnId;
+      let join: SubagentJoinState | null = null;
+      if (!targetTurnId && !running) {
+        const resumed = await api<{ activeTurnId?: string | null; subagentJoin?: SubagentJoinState | null }>(`/api/threads/${selectedAgent.id}/resume`, {
+          method: "POST",
+          body: "{}",
+        });
+        targetTurnId = resumed.activeTurnId ?? null;
+        join = resumed.subagentJoin ?? null;
+      }
+      if (targetTurnId) {
+        await api(`/api/threads/${selectedAgent.id}/steer`, {
+          method: "POST",
+          body: JSON.stringify({
+            text,
+            clientId: createClientId(),
+            projectId,
+            expectedTurnId: targetTurnId,
+            skills: [],
+            attachments: [],
+          }),
+        });
+      } else if (running || join) {
+        await queueFollowUp(text, projectId);
+      } else {
+        await api(`/api/threads/${selectedAgent.id}/turns`, {
+          method: "POST",
+          body: JSON.stringify({
+            text,
+            clientId: createClientId(),
+            projectId,
+            approvalPolicy: thread?.approvalPolicy,
+            networkAccess: thread?.networkAccess,
+            skills: [],
+            attachments: [],
+          }),
+        });
+      }
+      setPrompt("");
+      setRevision((value) => value + 1);
+    } catch (reason) {
+      setActionError(reason instanceof Error ? reason.message : "无法向子代理发送指令");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function interrupt() {
+    if (!activeTurnId || sending) return;
+    setSending(true);
+    setActionError("");
+    try {
+      await api(`/api/threads/${selectedAgent.id}/interrupt`, {
+        method: "POST",
+        body: JSON.stringify({ turnId: activeTurnId }),
+      });
+      setRevision((value) => value + 1);
+    } catch (reason) {
+      setActionError(reason instanceof Error ? reason.message : "无法停止子代理");
+    } finally {
+      setSending(false);
+    }
+  }
+
   return (
     <aside className="subagent-panel" aria-label="子代理详情">
       <header>
@@ -122,6 +217,9 @@ export function SubagentPanel({ rootThreadId, agent, agents, projectPath, onClos
       </nav>
       <div className="subagent-panel-meta"><Bot size={13} /><span title={selectedAgent.id}>{displayName(selectedAgent, thread)} · {selectedAgent.id}</span><small>{thread?.parentThreadId === rootThreadId ? "直接子代理" : thread?.parentThreadId ? "嵌套子代理" : statusLabel(status)}</small></div>
       <div className="subagent-panel-body">
+        {selectedRequests.map((request) => request.method === "item/tool/requestUserInput"
+          ? <UserInputCard key={request.id} request={request} onResolved={onRequestResolved} />
+          : <ApprovalCard key={request.id} request={request} onResolved={onRequestResolved} />)}
         {loading && <div className="subagent-panel-state loading"><LoaderCircle size={17} />正在读取子代理会话…</div>}
         {error && <div className="subagent-panel-state error"><AlertTriangle size={17} /><span>{error}</span><button onClick={() => setRevision((value) => value + 1)}><RefreshCw size={13} />重新读取</button></div>}
         {!loading && !error && items.length === 0 && <div className="subagent-panel-state"><Bot size={18} />这个子代理暂时没有可显示的会话内容。</div>}
@@ -140,6 +238,28 @@ export function SubagentPanel({ rootThreadId, agent, agents, projectPath, onClos
           readOnly
         />}
       </div>
+      <footer className="subagent-panel-composer">
+        {actionError && <div className="subagent-action-error"><AlertTriangle size={13} />{actionError}</div>}
+        {waitingForRequest && <small>这个子代理正在等待你的批准或输入，请先处理上方请求。</small>}
+        <textarea
+          value={prompt}
+          onChange={(event) => setPrompt(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.nativeEvent.isComposing || event.key !== "Enter" || event.shiftKey) return;
+            event.preventDefault();
+            void sendFollowUp();
+          }}
+          placeholder={running ? "向正在运行的子代理追加指令…" : "继续给这个子代理分配工作…"}
+          disabled={loading || sending || waitingForRequest || !thread?.projectId}
+          rows={2}
+        />
+        <div>
+          <span>{running ? <><CornerDownRight size={12} />立即影响当前执行</> : "Enter 发送，Shift+Enter 换行"}</span>
+          {activeTurnId && <button className="ghost-button compact danger-text" disabled={sending} onClick={() => void interrupt()}><Square size={13} />停止</button>}
+          {["failed", "errored", "interrupted"].includes(status) && <button className="secondary-button compact" disabled={sending || waitingForRequest} onClick={() => void sendFollowUp("请根据上一轮的失败原因重新尝试，并继续完成原任务。") }><RotateCcw size={13} />重试</button>}
+          <button className="primary-button compact" disabled={!prompt.trim() || sending || waitingForRequest || !thread?.projectId} onClick={() => void sendFollowUp()}><Send size={13} />{sending ? "发送中…" : running ? "追加" : "继续"}</button>
+        </div>
+      </footer>
     </aside>
   );
 }

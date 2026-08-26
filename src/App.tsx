@@ -8,8 +8,9 @@ import { ModelPicker } from "./components/ModelPicker";
 import { findSkillMention, matchingPlugins, matchingSkills, SkillMentionMenu, type ProjectFileMention, type SkillMention } from "./components/SkillMentionMenu";
 import { Timeline } from "./components/Timeline";
 import { ThreadMenu } from "./components/ThreadMenu";
+import { UserInputCard } from "./components/UserInputCard";
 import { resolveSubagentStates, runningAgentStatuses, threadAgentStatus, type AgentViewState } from "./subagents";
-import type { AppEvent, ApprovalPolicy, Bootstrap, NotificationSummary, PluginSummary, PluginsResult, Project, ReasoningEffort, Skill, SkillsResult, SubagentJoinState, Thread, ThreadItem, Turn } from "./types";
+import type { AppEvent, ApprovalPolicy, Bootstrap, NotificationSummary, PendingServerRequest, PluginSummary, PluginsResult, Project, ReasoningEffort, Skill, SkillsResult, SubagentJoinState, Thread, ThreadItem, Turn } from "./types";
 
 const GlobalSearchDialog = lazy(() => import("./components/GlobalSearchDialog").then((module) => ({ default: module.GlobalSearchDialog })));
 const NotificationCenterDialog = lazy(() => import("./components/NotificationCenterDialog").then((module) => ({ default: module.NotificationCenterDialog })));
@@ -227,7 +228,7 @@ export default function App() {
   const [items, setItems] = useState<ThreadItem[]>([]);
   const [threadLoading, setThreadLoading] = useState(false);
   const [streamingItemId, setStreamingItemId] = useState<string | null>(null);
-  const [pendingRequests, setPendingRequests] = useState<Array<{ id: number; method: string; params: Record<string, any> }>>([]);
+  const [pendingRequests, setPendingRequests] = useState<PendingServerRequest[]>([]);
   const [turnRunning, setTurnRunning] = useState(false);
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [subagentJoin, setSubagentJoin] = useState<SubagentJoinState | null>(null);
@@ -1754,7 +1755,9 @@ export default function App() {
               <div className="conversation-inner">
                 {threadLoading && items.length === 0 && <div className="conversation-loading" role="status"><span className="spin" />正在载入聊天记录…</div>}
                 <Timeline key={selectedThreadId ?? "empty"} items={items} streamingItemId={streamingItemId} turnRunning={conversationBusy} activeTurnId={activeTurnId} activeTurnStartedAtMs={activeTurnStartedAtMs} subagents={resolvedSubagents} retryProviders={retryProviders} retryProviderId={retryProviderId} projectPath={selectedProject.path} onOpenFile={openWorkspaceFile} onSuggestion={(text) => setComposer(text)} onResend={(item, providerId) => void resendUserMessage(item, providerId)} onRegenerate={regenerateMessage} onEditBranch={(item) => void editAndBranch(item)} onOpenSubagent={(agent) => { setWorkspacePanel(false); setSelectedSubagent(agent); }} />
-                {pendingRequests.filter((request) => !request.params.threadId || request.params.threadId === selectedThreadId).map((request) => <ApprovalCard key={request.id} request={request} onResolved={(id) => setPendingRequests((current) => current.filter((item) => item.id !== id))} />)}
+                {pendingRequests.filter((request) => !request.params.threadId || request.params.threadId === selectedThreadId).map((request) => request.method === "item/tool/requestUserInput"
+                  ? <UserInputCard key={request.id} request={request} onResolved={(id) => setPendingRequests((current) => current.filter((item) => item.id !== id))} />
+                  : <ApprovalCard key={request.id} request={request} onResolved={(id) => setPendingRequests((current) => current.filter((item) => item.id !== id))} />)}
               </div>
             )}
           </div>
@@ -1778,7 +1781,7 @@ export default function App() {
       </main>
 
       <Suspense fallback={null}>
-        {selectedSubagentState && selectedProject && selectedThreadId && <SubagentPanel rootThreadId={selectedThreadId} agent={selectedSubagentState} agents={resolvedSubagents} projectPath={selectedProject.path} onClose={() => setSelectedSubagent(null)} onOpenFile={openWorkspaceFile} onOpenSubagent={setSelectedSubagent} />}
+        {selectedSubagentState && selectedProject && selectedThreadId && <SubagentPanel rootThreadId={selectedThreadId} agent={selectedSubagentState} agents={resolvedSubagents} projectPath={selectedProject.path} pendingRequests={pendingRequests} onRequestResolved={(id) => setPendingRequests((current) => current.filter((item) => item.id !== id))} onClose={() => setSelectedSubagent(null)} onOpenFile={openWorkspaceFile} onOpenSubagent={setSelectedSubagent} />}
         {workspacePanel && selectedProject && <WorkspacePanel project={selectedProject} items={items} requestedFile={workspaceFileRequest} onClose={() => setWorkspacePanel(false)} />}
         {projectDialog && <ProjectDialog open bootstrap={bootstrap} onClose={() => setProjectDialog(false)} onCreated={loadBootstrap} />}
         {globalSearchOpen && <GlobalSearchDialog open onClose={() => setGlobalSearchOpen(false)} onSelect={selectSearchResult} />}

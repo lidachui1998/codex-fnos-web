@@ -763,7 +763,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .inspector-list > button { width: 100%; min-height: 46px; display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 8px; padding: 7px 8px; border: 0; border-radius: 8px; background: transparent; cursor: pointer; text-align: left; }
 .inspector-list > button:hover { background: var(--panel); }
 
-.subagent-panel { min-width: 0; min-height: 0; display: grid; grid-template-rows: 68px minmax(72px,auto) auto minmax(0,1fr); height: 100%; overflow: hidden; border-left: 1px solid var(--line); background: var(--paper); }
+.subagent-panel { min-width: 0; min-height: 0; display: grid; grid-template-rows: 68px minmax(72px,auto) auto minmax(0,1fr) auto; height: 100%; overflow: hidden; border-left: 1px solid var(--line); background: var(--paper); }
 .subagent-panel > header { min-width: 0; display: grid; grid-template-columns: 34px minmax(0,1fr) auto; align-items: center; gap: 9px; padding: 0 10px 0 13px; border-bottom: 1px solid var(--line); }
 .subagent-panel > header > span { min-width: 0; }
 .subagent-panel > header strong, .subagent-panel > header small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -793,7 +793,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .subagent-panel-meta > svg { color: var(--accent-dark); }
 .subagent-panel-meta > span { overflow: hidden; font: 10px Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
 .subagent-panel-meta > small { font-size: 10px; white-space: nowrap; }
-.subagent-panel-body { min-height: 0; overflow-y: auto; padding: 13px 11px 40px; }
+.subagent-panel-body { min-height: 0; overflow-y: auto; padding: 13px 11px; }
 .subagent-panel-body .timeline { gap: 13px; }
 .subagent-panel-body .message, .subagent-panel-body .tool-item, .subagent-panel-body .subagent-card, .subagent-panel-body .subagent-activity, .subagent-panel-body .subagent-live-panel { margin-left: 0; }
 .subagent-panel-body .tool-item { max-width: 100%; }
@@ -804,6 +804,20 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .subagent-panel-state.loading > svg:first-child { animation: spin 1.2s linear infinite; }
 .subagent-panel-state.error { color: var(--red); }
 .subagent-panel-state.error button { display: inline-flex; align-items: center; gap: 5px; min-height: 30px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); cursor: pointer; }
+.subagent-panel-composer { display: grid; gap: 7px; padding: 10px 11px 12px; border-top: 1px solid var(--line); background: color-mix(in srgb,var(--paper) 94%,var(--panel)); }
+.subagent-panel-composer > textarea { width: 100%; min-height: 58px; max-height: 132px; resize: vertical; padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px; outline: none; background: var(--paper); color: var(--ink); font: inherit; font-size: 12px; line-height: 1.45; }
+.subagent-panel-composer > textarea:focus { border-color: color-mix(in srgb,var(--accent) 56%,var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb,var(--accent) 11%,transparent); }
+.subagent-panel-composer > textarea:disabled { opacity: .62; cursor: not-allowed; }
+.subagent-panel-composer > small { color: var(--accent-dark); font-size: 10px; }
+.subagent-panel-composer > div:last-child { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.subagent-panel-composer > div:last-child > span { min-width: 0; flex: 1; display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 9.5px; }
+.subagent-action-error { display: flex; align-items: flex-start; gap: 5px; padding: 7px 8px; border-radius: 8px; background: var(--danger-panel); color: var(--red); font-size: 10px; line-height: 1.35; }
+.user-input-card { align-items: start; }
+.user-input-question { display: grid; gap: 4px; margin-top: 9px; }
+.user-input-question > span { font-size: 11px; font-weight: 750; }
+.user-input-question > small { color: var(--muted); font-size: 10px; line-height: 1.4; }
+.user-input-question > input { min-height: 34px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; outline: none; background: var(--paper); color: var(--ink); font: inherit; font-size: 11px; }
+.user-input-question > input:focus { border-color: color-mix(in srgb,var(--accent) 56%,var(--line)); }
 .inspector-list > button > svg:first-child { color: var(--accent-dark); }
 .inspector-list > button span { min-width: 0; }
 .inspector-list strong, .inspector-list small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

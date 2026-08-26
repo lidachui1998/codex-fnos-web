@@ -1,9 +1,8 @@
 import { Check, ShieldAlert, X } from "lucide-react";
 import { api } from "../api";
+import type { PendingServerRequest } from "../types";
 
-type Request = { id: number; method: string; params: Record<string, any> };
-
-export function ApprovalCard({ request, onResolved }: { request: Request; onResolved: (id: number) => void }) {
+export function ApprovalCard({ request, onResolved }: { request: PendingServerRequest; onResolved: (id: number) => void }) {
   const params = request.params ?? {};
   const isPermissions = request.method === "item/permissions/requestApproval";
 

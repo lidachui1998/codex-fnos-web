@@ -119,6 +119,12 @@ export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "
 export type ReasoningProfile = "auto" | "openai" | "anthropic" | "deepseek" | "qwen" | "kimi" | "glm" | "gemini" | "generic" | "none";
 export type ApprovalPolicy = "on-request" | "never";
 
+export type PendingServerRequest = {
+  id: number;
+  method: string;
+  params: Record<string, any>;
+};
+
 export type Skill = {
   name: string;
   description: string;
