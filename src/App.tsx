@@ -1,4 +1,4 @@
-import { Archive, ArrowDownToLine, ArrowUpToLine, Bell, Bot, Boxes, CalendarClock, Clock3, Code2, CornerDownRight, FileText, Folder, FolderMinus, Image, Menu, MessageSquarePlus, MoreHorizontal, PanelLeft, PanelLeftClose, PanelLeftOpen, Paperclip, Plus, Search, Send, Settings, ShieldCheck, Sparkles, Square, Trash2, Wifi, WifiOff, X } from "lucide-react";
+import { Archive, ArrowDownToLine, ArrowUpToLine, Bell, Bot, Boxes, CalendarClock, Clock3, Code2, CornerDownRight, FileText, Folder, FolderMinus, Image, Menu, MessageSquarePlus, MoreHorizontal, PanelLeft, PanelLeftClose, PanelLeftOpen, Paperclip, Plus, RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Square, Trash2, Wifi, WifiOff, X } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent } from "react";
 import { api, ApiError, connectEvents } from "./api";
 import { createClientId } from "./client-id";
@@ -135,11 +135,24 @@ type ChatAttachment =
 type OutgoingMessage = {
   text: string;
   attachments: ChatAttachment[];
-  skills: Skill[];
-  fromQueue?: boolean;
+  skills: Array<Pick<Skill, "name" | "path">>;
 };
 
-type QueuedMessage = OutgoingMessage & { id: string; threadId: string };
+type QueuedMessage = OutgoingMessage & {
+  id: string;
+  threadId: string;
+  projectId: string;
+  status: "queued" | "dispatching" | "failed";
+  attemptCount: number;
+  lastError?: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+function upsertQueuedMessage(messages: QueuedMessage[], next: QueuedMessage) {
+  return [...messages.filter((message) => message.id !== next.id), next]
+    .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+}
 
 function optimisticMessageContent(payload: OutgoingMessage, text: string): NonNullable<ThreadItem["content"]> {
   const content: NonNullable<ThreadItem["content"]> = [];
@@ -592,6 +605,17 @@ export default function App() {
     }
   }, []);
 
+  const loadQueuedMessages = useCallback(async () => {
+    try {
+      const result = await api<{ data: QueuedMessage[] }>("/api/outbox", { cache: "no-store" });
+      setQueuedMessages(result.data ?? []);
+    } catch (reason) {
+      if (!(reason instanceof ApiError && reason.status === 401)) {
+        setFatalError(reason instanceof Error ? `等待消息同步失败：${reason.message}` : "等待消息同步失败");
+      }
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     api<{ authenticated: boolean; setupRequired: boolean }>("/api/auth/status")
@@ -611,6 +635,10 @@ export default function App() {
   useEffect(() => {
     if (authMode === "authenticated") void loadBootstrap();
   }, [authMode, loadBootstrap]);
+
+  useEffect(() => {
+    if (authMode === "authenticated" && bootstrap?.activeAccountId) void loadQueuedMessages();
+  }, [authMode, bootstrap?.activeAccountId, loadQueuedMessages]);
 
   const flushDeltas = useCallback(() => {
     const queued = new Map(deltaQueue.current);
@@ -653,6 +681,10 @@ export default function App() {
       if (event.projectId === selectedProjectId) {
         setThreads((current) => [event.thread, ...current.filter((thread) => thread.id !== event.thread.id)]);
       }
+      return;
+    }
+    if (event.kind === "outbox_changed") {
+      void loadQueuedMessages();
       return;
     }
     if (event.kind === "subagent_join") {
@@ -794,7 +826,7 @@ export default function App() {
       setActiveTurnStartedAtMs(null);
       setStreamingItemId(null);
     }
-  }, [flushDeltas, loadBootstrap, selectedProjectId]);
+  }, [flushDeltas, loadBootstrap, loadQueuedMessages, selectedProjectId]);
 
   useEffect(() => {
     if (!eventsEnabled) return;
@@ -1224,14 +1256,38 @@ export default function App() {
     const payload = payloadOverride ?? { text: composer, attachments, skills: selectedSkills };
     if ((!payload.text.trim() && payload.attachments.length === 0 && payload.skills.length === 0) || !selectedProject) return;
     scrollConversationAfterSend();
-    if ((turnRunningRef.current || subagentJoinWaitingRef.current || sendingRef.current) && !payload.fromQueue) {
+    if (turnRunningRef.current || subagentJoinWaitingRef.current || sendingRef.current) {
       const threadId = forcedThreadId || selectedThreadId;
       if (!threadId) return;
-      setQueuedMessages((current) => [...current, { ...payload, id: createClientId(), threadId }]);
-      if (!payloadOverride) {
-        setComposer("");
-        setAttachments([]);
-        setSelectedSkills([]);
+      sendingRef.current = true;
+      setSending(true);
+      setFatalError("");
+      try {
+        const targetThread = threads.find((thread) => thread.id === threadId);
+        const result = await api<{ message: QueuedMessage }>(`/api/threads/${threadId}/outbox`, {
+          method: "POST",
+          body: JSON.stringify({
+            text: payload.text.trim(),
+            projectId: selectedProject.id,
+            model: forcedSelection?.inheritThreadSettings ? undefined : forcedSelection?.model || targetThread?.model || selectedModel || undefined,
+            effort: forcedSelection?.inheritThreadSettings ? undefined : forcedSelection?.effort || targetThread?.reasoningEffort || selectedEffort || undefined,
+            approvalPolicy: selectedApprovalPolicy,
+            networkAccess: selectedNetworkAccess,
+            skills: payload.skills,
+            attachments: payload.attachments.map(({ id: _id, size: _size, ...item }) => item),
+          }),
+        });
+        setQueuedMessages((current) => upsertQueuedMessage(current, result.message));
+        if (!payloadOverride) {
+          setComposer("");
+          setAttachments([]);
+          setSelectedSkills([]);
+        }
+      } catch (reason) {
+        setFatalError(reason instanceof Error ? `无法加入等待队列：${reason.message}` : "无法加入等待队列");
+      } finally {
+        sendingRef.current = false;
+        setSending(false);
       }
       return;
     }
@@ -1241,7 +1297,7 @@ export default function App() {
       setAttachments([]);
       setSelectedSkills([]);
     }
-    await startMessage(payload, forcedThreadId ?? (payload.fromQueue ? selectedThreadId : undefined), forcedSelection);
+    await startMessage(payload, forcedThreadId, forcedSelection);
   }
 
   async function steerMessage(payloadOverride?: OutgoingMessage, forcedThreadId?: string | null) {
@@ -1288,18 +1344,46 @@ export default function App() {
   }
 
   async function steerQueuedMessage(message: QueuedMessage) {
-    if (await steerMessage(message, message.threadId)) {
+    const expectedTurnId = activeTurnIdRef.current;
+    if (!expectedTurnId || message.status === "dispatching" || sendingRef.current) return;
+    sendingRef.current = true;
+    setSending(true);
+    setFatalError("");
+    try {
+      await api(`/api/outbox/${message.id}/steer`, {
+        method: "POST",
+        body: JSON.stringify({ expectedTurnId }),
+      });
       setQueuedMessages((current) => current.filter((item) => item.id !== message.id));
+    } catch (reason) {
+      setFatalError(reason instanceof Error ? `无法立即追加等待消息：${reason.message}` : "无法立即追加等待消息");
+      await loadQueuedMessages();
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
     }
   }
 
-  useEffect(() => {
-    if (conversationBusy || sending || !selectedThreadId) return;
-    const next = queuedMessages.find((item) => item.threadId === selectedThreadId);
-    if (!next) return;
-    setQueuedMessages((current) => current.filter((item) => item.id !== next.id));
-    void startMessage({ ...next, fromQueue: true }, next.threadId);
-  }, [conversationBusy, queuedMessages, selectedThreadId, sending]);
+  async function cancelQueuedMessage(message: QueuedMessage) {
+    if (message.status === "dispatching") return;
+    try {
+      await api(`/api/outbox/${message.id}`, { method: "DELETE" });
+      setQueuedMessages((current) => current.filter((item) => item.id !== message.id));
+    } catch (reason) {
+      setFatalError(reason instanceof Error ? `无法取消等待消息：${reason.message}` : "无法取消等待消息");
+      await loadQueuedMessages();
+    }
+  }
+
+  async function retryQueuedMessage(message: QueuedMessage) {
+    try {
+      const result = await api<{ message: QueuedMessage }>(`/api/outbox/${message.id}/retry`, { method: "POST", body: "{}" });
+      setQueuedMessages((current) => upsertQueuedMessage(current, result.message));
+    } catch (reason) {
+      setFatalError(reason instanceof Error ? `无法重试等待消息：${reason.message}` : "无法重试等待消息");
+      await loadQueuedMessages();
+    }
+  }
 
   async function switchRetryProvider(providerId: string) {
     if (!selectedThread) throw new Error("当前没有可重试的会话");
@@ -1685,7 +1769,7 @@ export default function App() {
             {skillMention && <SkillMentionMenu skills={mentionSkills} plugins={mentionPlugins} files={mentionFiles} activeIndex={Math.min(skillMentionIndex, Math.max(mentionOptionCount - 1, 0))} loading={skillsLoading} pluginLoading={pluginsLoading} fileLoading={mentionFilesLoading} error={skillsError} pluginError={pluginsError} fileError={mentionFilesError} limitReached={selectedSkills.length >= 6} fileLimitReached={attachments.length >= 6} onActiveIndexChange={setSkillMentionIndex} onSelect={selectMentionSkill} onSelectPlugin={selectMentionPlugin} onSelectFile={(file) => void selectMentionFile(file)} onManage={() => { setSkillMention(null); setSkillsDialog(true); }} onManagePlugins={() => { setSkillMention(null); setPluginsDialog(true); }} />}
             {selectedSkills.length > 0 && <div className="selected-skills" aria-label="本条消息强制使用的 Skills">{selectedSkills.map((skill) => <div className="skill-chip" key={skill.path} title="本条消息强制使用"><Sparkles size={13} /><span>@{skill.interface?.displayName || skill.name}</span><button onClick={() => setSelectedSkills((current) => current.filter((item) => item.path !== skill.path))} aria-label={`移除 Skill ${skill.name}`}><X size={12} /></button></div>)}</div>}
             {attachments.length > 0 && <div className="attachment-list">{attachments.map((item) => <div className="attachment-chip" key={item.id}>{item.kind === "image" ? <Image size={14} /> : <FileText size={14} />}<span><strong>{item.name}</strong><small>{Math.max(1, Math.round(item.size / 1024))} KB</small></span><button onClick={() => setAttachments((current) => current.filter((entry) => entry.id !== item.id))} aria-label={`移除 ${item.name}`}><X size={13} /></button></div>)}</div>}
-            {currentQueuedMessages.length > 0 && <div className="queued-messages"><span>等待发送 {currentQueuedMessages.length} 条（当前回复结束后自动发送）</span>{currentQueuedMessages.map((item, index) => <div key={item.id}><em>{item.text.trim() || `附件消息 ${index + 1}`}</em><button className="queued-steer-button" disabled={!canSteer} onClick={() => void steerQueuedMessage(item)} title="现在追加到当前回复" aria-label="立即追加这条待发送消息"><CornerDownRight size={12} /></button><button onClick={() => setQueuedMessages((current) => current.filter((entry) => entry.id !== item.id))} aria-label="取消待发送消息"><X size={12} /></button></div>)}</div>}
+            {currentQueuedMessages.length > 0 && <div className="queued-messages"><span>等待发送 {currentQueuedMessages.length} 条（已保存到 NAS，关闭页面后仍会发送）</span>{currentQueuedMessages.map((item, index) => <div key={item.id}><em title={item.lastError || undefined}>{item.text.trim() || `附件消息 ${index + 1}`}{item.status === "dispatching" ? " · 正在发送" : item.status === "failed" ? ` · 发送失败${item.lastError ? `：${item.lastError}` : ""}` : ""}</em>{item.status === "failed" && <button onClick={() => void retryQueuedMessage(item)} title="重试等待消息" aria-label="重试等待消息"><RefreshCw size={12} /></button>}<button className="queued-steer-button" disabled={!canSteer || item.status === "dispatching"} onClick={() => void steerQueuedMessage(item)} title="现在追加到当前回复" aria-label="立即追加这条待发送消息"><CornerDownRight size={12} /></button><button disabled={item.status === "dispatching"} onClick={() => void cancelQueuedMessage(item)} aria-label="取消待发送消息"><X size={12} /></button></div>)}</div>}
             <textarea ref={composerRef} value={composer} onChange={handleComposerChange} onSelect={(event) => updateSkillMention(composer, event.currentTarget.selectionStart)} onBlur={() => window.setTimeout(() => setSkillMention(null), 120)} onPaste={(event) => { const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/")); if (images.length > 0) { event.preventDefault(); void addAttachments(images); } }} onKeyDown={handleComposerKeyDown} placeholder={conversationBusy || sending ? subagentJoinWaiting ? "主任务正在等待子代理；新消息可排队发送…" : "继续输入，可立即追加或等待发送…" : selectedProject ? "告诉 Codex 你想完成什么… 输入 @ 选择 Skill、插件、文件或目录" : "请先选择项目"} disabled={!selectedProject || bootstrap.bridge.status !== "ready"} rows={1} />
             <div className="composer-actions"><div className="composer-left"><input ref={attachmentInputRef} className="sr-only" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.json,.jsonl,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.toml,.ini,.env,.sh,.py,.java,.go,.rs,.sql,.log,.csv" onChange={(event) => void addAttachments(event.target.files)} /><button className="attach-button" disabled={!selectedProject || attachments.length >= 6} onClick={() => attachmentInputRef.current?.click()} title="添加图片或文本/代码文件"><Paperclip size={15} /> <span>附件</span></button><button className="attach-button" disabled={!selectedProject} onClick={() => setSkillsDialog(true)} title="管理允许智能调用的 Skills"><Sparkles size={15} /> <span>Skills</span></button><span>{conversationBusy || sending ? subagentJoinWaiting ? "Enter 加入等待队列 · 子代理结束后自动继续" : "Enter 等待发送 · Ctrl/⌘+Enter 立即追加" : "输入 @ 选择 Skill/插件/项目内容 · Enter 发送"}</span></div><div className="composer-right">{turnRunning && <button className="stop-button" onClick={() => void interrupt()}><Square size={14} /> 停止</button>}{conversationBusy || sending ? <><button className="send-choice-button steer-button" onClick={() => void steerMessage()} disabled={!canSteer || (!composer.trim() && attachments.length === 0 && selectedSkills.length === 0)} title={subagentJoinWaiting ? "当前正在等待子代理，暂时不能立即追加" : "立即影响当前正在生成的回复"}><CornerDownRight size={14} /><span>立即追加</span></button><button className="send-choice-button queue-button" onClick={() => void sendMessage()} disabled={(!composer.trim() && attachments.length === 0 && selectedSkills.length === 0) || !selectedProject} title="主任务全部收口后自动发送"><Clock3 size={14} /><span>等待发送</span></button></> : <button className="send-button" onClick={() => void sendMessage()} disabled={(!composer.trim() && attachments.length === 0 && selectedSkills.length === 0) || !selectedProject} aria-label="发送消息"><Send size={17} /></button>}</div></div>
           </div>

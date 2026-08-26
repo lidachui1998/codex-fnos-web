@@ -104,6 +104,24 @@ export function openDatabase(path) {
       updated_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS queued_messages (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL REFERENCES codex_accounts(id) ON DELETE CASCADE,
+      thread_id TEXT NOT NULL,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      display_payload_json TEXT NOT NULL,
+      turn_input_json TEXT NOT NULL,
+      approval_policy TEXT NOT NULL CHECK (approval_policy IN ('on-request', 'never')),
+      network_access INTEGER NOT NULL DEFAULT 1,
+      model TEXT,
+      reasoning_effort TEXT,
+      status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'dispatching', 'failed')),
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS scheduled_runs (
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL REFERENCES scheduled_tasks(id) ON DELETE CASCADE,
@@ -157,6 +175,7 @@ export function openDatabase(path) {
     );
 
     CREATE INDEX IF NOT EXISTS scheduled_tasks_due_idx ON scheduled_tasks(enabled, next_run_at);
+    CREATE INDEX IF NOT EXISTS queued_messages_account_thread_idx ON queued_messages(account_id, thread_id, created_at);
     CREATE INDEX IF NOT EXISTS scheduled_runs_task_idx ON scheduled_runs(task_id, started_at DESC);
     CREATE INDEX IF NOT EXISTS notifications_updated_idx ON notifications(updated_at DESC);
     CREATE INDEX IF NOT EXISTS notifications_status_idx ON notifications(status, updated_at DESC);

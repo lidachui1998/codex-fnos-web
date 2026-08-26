@@ -25,6 +25,7 @@ import { readJson, sendError, sendJson, serveStatic } from "./lib/http.mjs";
 import { createInternalToken, isInternalAuthorized, loadOrCreateMasterKey } from "./lib/security.mjs";
 import { handleProviderGateway } from "./provider-gateway.mjs";
 import { NotificationService } from "./notification-service.mjs";
+import { OutboxService } from "./outbox-service.mjs";
 import { SseHub } from "./sse-hub.mjs";
 import { ScheduleService } from "./schedule-service.mjs";
 import { SkillService } from "./skill-service.mjs";
@@ -79,10 +80,14 @@ const bridge = new AppServerBridge({
   gatewayToken,
   stores,
 });
+let outbox = null;
 const subagentJoins = new SubagentJoinService({
   stores,
   bridge,
-  onChanged: (state) => hub.broadcast({ kind: "subagent_join", ...state, at: Date.now() }),
+  onChanged: (state) => {
+    hub.broadcast({ kind: "subagent_join", ...state, at: Date.now() });
+    if (state.status === "resumed" || state.status === "failed") outbox?.kick(state.threadId, 350);
+  },
 });
 const skillInstaller = new GitHubSkillInstaller({
   codexHome,
@@ -98,6 +103,13 @@ const accounts = new AccountService({
   skillInstaller,
   baseCodexHome,
   accountsRoot,
+});
+outbox = new OutboxService({
+  stores,
+  bridge,
+  subagentJoins,
+  getAccountId: () => accounts.active().id,
+  onChanged: (state) => hub.broadcast({ kind: "outbox_changed", ...state, at: Date.now() }),
 });
 const skills = new SkillService(bridge, { installer: skillInstaller });
 const notifications = new NotificationService({
@@ -145,7 +157,7 @@ function queueBridgeRestart() {
   restartTimer = setTimeout(restartWhenIdle, 400);
 }
 
-const handleApi = createApiHandler({ stores, bridge, accounts, queueBridgeRestart, appearance, updater, workspace, skills, extensions, schedules, notifications, subagentJoins });
+const handleApi = createApiHandler({ stores, bridge, accounts, queueBridgeRestart, appearance, updater, workspace, skills, extensions, schedules, notifications, subagentJoins, outbox });
 const loginFailures = new Map();
 const loginWindowMs = 5 * 60 * 1000;
 const maxLoginFailures = 5;
@@ -287,6 +299,7 @@ server.listen(port, host, () => {
 });
 
 async function shutdown() {
+  outbox.close();
   subagentJoins.close();
   schedules.close();
   notifications.close();

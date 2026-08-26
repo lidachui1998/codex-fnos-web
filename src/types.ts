@@ -364,6 +364,7 @@ export type AppEvent =
   | { kind: "notification"; method: string; params: Record<string, any> }
   | { kind: "notification_changed"; summary: NotificationSummary; at: number }
   | { kind: "thread_created"; projectId: string; thread: Thread; at: number }
+  | { kind: "outbox_changed"; threadId: string; count: number; at: number }
   | { kind: "subagent_join"; threadId: string; status: "waiting" | "finalizing" | "resumed" | "failed"; activeCount: number; rootTurnId?: string | null; turnId?: string | null; error?: string | null; at: number }
   | { kind: "heartbeat"; at: number };
 

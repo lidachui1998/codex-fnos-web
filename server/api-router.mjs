@@ -82,6 +82,38 @@ function buildTurnInput(input, availableSkills = []) {
   return result;
 }
 
+function prepareOutboxMessage(input, availableSkills = []) {
+  const turnInput = buildTurnInput(input, availableSkills);
+  const requestedSkills = Array.isArray(input.skills) ? input.skills : [];
+  const selectedSkills = requestedSkills.map((requested) => {
+    const skill = availableSkills.find((item) => String(item.path) === String(requested?.path || "") && item.enabled !== false);
+    return { name: skill.name, path: skill.path };
+  });
+  const attachments = (Array.isArray(input.attachments) ? input.attachments : []).map((attachment) => {
+    const name = String(attachment?.name || "未命名附件").slice(0, 180);
+    if (attachment?.kind === "image") {
+      const match = String(attachment.dataUrl || "").match(imageDataUrl);
+      return {
+        id: randomUUID(),
+        kind: "image",
+        name,
+        size: Buffer.byteLength(match[2], "base64"),
+        dataUrl: attachment.dataUrl,
+      };
+    }
+    const content = String(attachment.content || "");
+    return { id: randomUUID(), kind: "text", name, size: Buffer.byteLength(content), content };
+  });
+  return {
+    turnInput,
+    displayPayload: {
+      text: String(input.text || ""),
+      attachments,
+      skills: selectedSkills,
+    },
+  };
+}
+
 function readReasoningEffort(value) {
   const effort = String(value || "").trim().toLowerCase();
   if (!effort) return undefined;
@@ -113,7 +145,7 @@ function publicCodexStatus(value) {
   return result;
 }
 
-export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart, appearance, updater, workspace, skills, extensions, schedules, notifications, subagentJoins = null }) {
+export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart, appearance, updater, workspace, skills, extensions, schedules, notifications, subagentJoins = null, outbox = null }) {
   const findProject = (id) => stores.listProjects().find((item) => item.id === id);
   const findProvider = (id) => stores.listProviders().find((item) => item.id === id);
   const decorateThread = (thread, extra = {}) => {
@@ -176,6 +208,31 @@ export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart,
         appearance: appearance.status(),
         notificationSummary: notifications.summary(),
       });
+      return;
+    }
+    if (req.method === "GET" && pathname === "/api/outbox") {
+      sendJson(res, 200, { data: outbox?.list(searchParams.get("threadId")) ?? [] });
+      return;
+    }
+    params = route(req.method, pathname, { method: "DELETE", path: /^\/api\/outbox\/(?<id>[^/]+)$/ });
+    if (params) {
+      if (!outbox?.remove(params.id)) return sendError(res, 404, "等待消息不存在");
+      sendJson(res, 200, { deleted: true });
+      return;
+    }
+    params = route(req.method, pathname, { method: "POST", path: /^\/api\/outbox\/(?<id>[^/]+)\/retry$/ });
+    if (params) {
+      const message = outbox?.retry(params.id);
+      if (!message) return sendError(res, 404, "等待消息不存在");
+      sendJson(res, 200, { message });
+      return;
+    }
+    params = route(req.method, pathname, { method: "POST", path: /^\/api\/outbox\/(?<id>[^/]+)\/steer$/ });
+    if (params) {
+      const input = await readJson(req);
+      const expectedTurnId = typeof input.expectedTurnId === "string" ? input.expectedTurnId.trim() : "";
+      if (!expectedTurnId) return sendError(res, 400, "缺少当前任务 ID，无法立即追加消息");
+      sendJson(res, 202, await outbox.steer(params.id, expectedTurnId));
       return;
     }
 
@@ -783,6 +840,7 @@ export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart,
     }
     params = route(req.method, pathname, { method: "DELETE", path: /^\/api\/threads\/(?<id>[^/]+)$/ });
     if (params) {
+      outbox?.removeThread(params.id);
       stores.saveThreadDeleted(params.id);
       sendJson(res, 200, { deleted: true });
       return;
@@ -889,6 +947,7 @@ export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart,
     }
     params = route(req.method, pathname, { method: "POST", path: /^\/api\/threads\/(?<id>[^/]+)\/archive$/ });
     if (params) {
+      outbox?.removeThread(params.id);
       stores.saveThreadArchived(params.id, true);
       sendJson(res, 200, { archived: true, threadId: params.id });
       return;
@@ -933,6 +992,36 @@ export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart,
       }));
       if (approvalPolicy) stores.saveThreadApprovalPolicy(params.id, approvalPolicy);
       stores.saveThreadNetworkAccess(params.id, networkAccess);
+      return;
+    }
+    params = route(req.method, pathname, { method: "POST", path: /^\/api\/threads\/(?<id>[^/]+)\/outbox$/ });
+    if (params) {
+      if (!outbox) return sendError(res, 503, "等待发送服务尚未就绪");
+      const input = await readJson(req, 12 * 1024 * 1024);
+      const project = findProject(input.projectId);
+      if (!project) return sendError(res, 404, "当前会话所属项目不存在");
+      let availableSkills = [];
+      if (Array.isArray(input.skills) && input.skills.length > 0) {
+        availableSkills = (await skills.list(project, false)).skills;
+      }
+      const prepared = prepareOutboxMessage(input, availableSkills);
+      const preferences = stores.getThreadPreferences(params.id);
+      const approvalPolicy = readApprovalPolicy(input.approvalPolicy)
+        ?? preferences?.approvalPolicy
+        ?? stores.getSettings().approvalPolicy;
+      const networkAccess = Object.hasOwn(input, "networkAccess")
+        ? Boolean(input.networkAccess)
+        : preferences?.networkAccess ?? stores.getSettings().networkAccess;
+      const message = outbox.enqueue({
+        threadId: params.id,
+        projectId: project.id,
+        ...prepared,
+        approvalPolicy,
+        networkAccess,
+        model: String(input.model || "").trim() || null,
+        effort: readReasoningEffort(input.effort),
+      });
+      sendJson(res, 201, { message });
       return;
     }
     params = route(req.method, pathname, { method: "POST", path: /^\/api\/threads\/(?<id>[^/]+)\/steer$/ });
