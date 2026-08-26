@@ -130,6 +130,9 @@ export function openDatabase(path) {
       status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
       output TEXT,
       error TEXT,
+      phase TEXT NOT NULL DEFAULT 'created',
+      last_event_at INTEGER,
+      diagnostics_json TEXT NOT NULL DEFAULT '[]',
       started_at INTEGER NOT NULL,
       completed_at INTEGER
     );
@@ -230,6 +233,14 @@ export function openDatabase(path) {
     ["compatibility_json", "TEXT NOT NULL DEFAULT '[]'"],
   ]) {
     if (!scheduledTaskColumns.has(column)) db.exec(`ALTER TABLE scheduled_tasks ADD COLUMN ${column} ${definition}`);
+  }
+  const scheduledRunColumns = new Set(db.prepare("PRAGMA table_info(scheduled_runs)").all().map((column) => column.name));
+  for (const [column, definition] of [
+    ["phase", "TEXT NOT NULL DEFAULT 'created'"],
+    ["last_event_at", "INTEGER"],
+    ["diagnostics_json", "TEXT NOT NULL DEFAULT '[]'"],
+  ]) {
+    if (!scheduledRunColumns.has(column)) db.exec(`ALTER TABLE scheduled_runs ADD COLUMN ${column} ${definition}`);
   }
   db.exec(`
     UPDATE proxy_profiles SET http_url_encrypted = url_encrypted, http_url_hint = url_hint

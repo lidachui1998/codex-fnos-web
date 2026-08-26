@@ -1134,7 +1134,22 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .schedule-compatibility.editor .toggle-row { display: flex; }
 .schedule-runs button { display: inline-flex; align-items: center; gap: 5px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--muted); cursor: pointer; font-size: 8px; }
 .schedule-runs button:disabled { cursor: default; }
+.schedule-runs button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-dark); }
+.schedule-runs button.active > svg:last-child { transform: rotate(180deg); }
 .schedule-runs em { color: var(--faint); font-style: normal; }
+.schedule-run-detail { grid-column: 2/-1; min-width: 0; padding: 10px 12px; border: 1px solid color-mix(in srgb,var(--accent) 28%,var(--line)); border-radius: 10px; background: var(--panel); }
+.schedule-run-detail > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.schedule-run-detail > header span, .schedule-run-detail > header strong, .schedule-run-detail > header small { min-width: 0; display: block; }
+.schedule-run-detail > header strong { font-size: 9.5px; }
+.schedule-run-detail > header small { margin-top: 3px; color: var(--muted); font-size: 8px; }
+.schedule-run-detail ol { display: grid; gap: 6px; margin: 10px 0 0; padding: 0; list-style: none; }
+.schedule-run-detail li { display: grid; grid-template-columns: 95px minmax(0,1fr); gap: 9px; align-items: start; }
+.schedule-run-detail time { color: var(--faint); font-size: 7.5px; }
+.schedule-run-detail li strong, .schedule-run-detail li small { display: block; overflow-wrap: anywhere; }
+.schedule-run-detail li strong { font-size: 8.5px; }
+.schedule-run-detail li small { margin-top: 2px; color: var(--muted); font-size: 8px; line-height: 1.4; }
+.schedule-run-detail > footer { margin-top: 10px; color: var(--faint); font-size: 7.5px; }
+.schedule-run-error { max-height: 150px; margin: 9px 0 0; padding: 8px; overflow: auto; border: 1px solid color-mix(in srgb,var(--red) 25%,var(--line)); border-radius: 7px; background: var(--danger-soft); color: var(--red); font: 8px/1.5 "SFMono-Regular",Consolas,monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .schedule-form { display: grid; gap: 13px; padding: 15px 16px 20px; }
 .schedule-form label { display: grid; gap: 6px; }
 .schedule-form label > span, .weekday-picker > span { color: var(--ink); font-size: 9.5px; font-weight: 700; }
@@ -1249,7 +1264,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .plugins-toolbar { align-items: stretch; flex-direction: column; }
   .plugins-toolbar .secondary-button { width: 100%; }
   .schedule-card { grid-template-columns: 34px minmax(0,1fr); }
-  .schedule-card-actions, .schedule-runs { grid-column: 1/-1; }
+  .schedule-card-actions, .schedule-runs, .schedule-run-detail { grid-column: 1/-1; }
   .schedule-card-actions { justify-content: flex-end; flex-wrap: wrap; }
   .weekday-picker > div { flex-wrap: wrap; }
   .notification-toolbar { align-items: stretch; flex-direction: column; }

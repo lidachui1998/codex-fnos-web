@@ -1,4 +1,4 @@
-import { CalendarClock, CheckCircle2, Clock3, FileUp, LoaderCircle, Play, Plus, RefreshCw, Trash2, Wrench, XCircle } from "lucide-react";
+import { CalendarClock, CheckCircle2, ChevronDown, Clock3, FileUp, LoaderCircle, MessageSquareText, Play, Plus, RefreshCw, Trash2, Wrench, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { AutomationCompatibilityIssue, Project, Schedule, ScheduledTask } from "../types";
@@ -74,6 +74,26 @@ function durationText(startedAt: number, completedAt: number | null | undefined,
   return remainingMinutes ? `${hours} 小时 ${remainingMinutes} 分` : `${hours} 小时`;
 }
 
+function phaseText(phase: string) {
+  const labels: Record<string, string> = {
+    starting: "正在创建会话",
+    thread_started: "会话已创建",
+    turn_started: "主任务运行中",
+    item_commandExecution: "正在执行命令",
+    item_mcpToolCall: "正在调用工具",
+    item_completed: "步骤已完成",
+    subagents_waiting: "等待子代理",
+    subagents_finalizing: "正在收口子代理",
+    subagents_resumed: "主任务已恢复",
+    subagents_failed: "子代理收口失败",
+    service_restarted: "应用服务中途重启",
+    start_failed: "启动失败",
+    failed: "执行失败",
+    completed: "全部完成",
+  };
+  return labels[phase] || phase.replaceAll("_", " ");
+}
+
 export function ScheduledTasksDialog({ open, projects, onClose, onOpenThread }: {
   open: boolean;
   projects: Project[];
@@ -89,6 +109,7 @@ export function ScheduledTasksDialog({ open, projects, onClose, onOpenThread }: 
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [now, setNow] = useState(Date.now());
+  const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
 
   async function load() {
     setLoading(true); setError("");
@@ -170,19 +191,28 @@ export function ScheduledTasksDialog({ open, projects, onClose, onOpenThread }: 
   }
 
   return <Modal open={open} title="定时任务" subtitle="由飞牛工作台在后台触发；应用服务停止或 NAS 关机时不会运行。" onClose={onClose} wide>
-    <div className="schedule-safety"><CalendarClock size={18} /><span><strong>无人值守 · 自动审批 · 默认项目沙箱 · 可按任务放开</strong><small>浏览器、渲染器或编码器受阻时，可在编辑任务时明确关闭 Codex 内置沙箱；危险权限不会自动应用到其他任务。</small></span></div>
+    <div className="schedule-safety"><CalendarClock size={18} /><span><strong>无人值守 · 独立批次 · 自动审批 · 默认项目沙箱</strong><small>每次触发都创建全新批次；旧失败只用于诊断，不占用本次重试次数。浏览器、渲染器或编码器受阻时，可按任务明确关闭 Codex 内置沙箱。</small></span></div>
     {error && <div className="settings-error">{error}</div>}
     {notice && <div className="settings-success">{notice}</div>}
     {importing ? <AutomationImportPanel projects={projects} onCancel={resetForm} onImported={(task, replacedExisting) => { const prefix = replacedExisting ? "已更新" : "已导入"; setNotice(blockingIssues(task).length > 0 ? `${prefix}电脑任务“${task.name}”并保持暂停；下一步请点“兼容试运行”。` : `${prefix}电脑任务“${task.name}”并已按原状态启用。`); setImporting(false); void load(); }} /> : !editing ? <>
       <div className="schedule-toolbar"><button className="secondary-button compact" disabled={projects.length === 0} onClick={() => { resetForm(); setImporting(true); }}><FileUp size={14} /> 从电脑 Codex 导入</button><button className="primary-button compact" disabled={projects.length === 0} onClick={() => { resetForm(); setEditing(true); }}><Plus size={14} /> 新建任务</button><button className="secondary-button compact" disabled={loading} onClick={() => void load()}><RefreshCw size={14} className={loading ? "spin" : ""} /> 刷新</button></div>
       <div className="schedule-list">
-        {tasks.map((task) => <article className={`schedule-card ${task.enabled ? "" : "disabled"}`} key={task.id}>
-          <span className="schedule-card-icon"><Clock3 size={18} /></span>
-          <span className="schedule-card-copy"><strong>{task.name}</strong><small>{task.projectName} · {scheduleText(task.schedule)} · {task.networkAccess ? task.sandboxMode === "unrestricted" ? "已关闭 Codex 沙箱" : "项目可写沙箱" : "旧任务只读"}</small><em>{task.sourceAutomationId ? `电脑导入 · ${task.model || "跟随项目"} · ${task.reasoningEffort || "默认思考"} · 记忆 ${Math.ceil(task.memoryBytes / 1024)}KB · ` : ""}下次 {timeText(task.nextRunAt)} · 上次 {timeText(task.lastRunAt)}</em></span>
-          <span className="schedule-card-actions"><label title={task.enabled ? "已启用" : blockingIssues(task).length > 0 ? "完成 fnOS 适配后才能启用" : "已暂停"}><input type="checkbox" checked={task.enabled} disabled={busyId === task.id || (!task.enabled && blockingIssues(task).length > 0)} onChange={() => void toggle(task)} />{task.enabled ? "启用" : "暂停"}</label><button className="secondary-button compact" disabled={Boolean(busyId)} onClick={() => void run(task)}><Play size={13} /> {blockingIssues(task).length > 0 ? "兼容试运行" : "立即运行"}</button><button className="secondary-button compact" onClick={() => { setForm(formFromTask(task)); setEditing(true); }}><Wrench size={13} /> {blockingIssues(task).length > 0 ? "编辑适配" : "编辑"}</button><button className="icon-button small danger" title="删除" disabled={busyId === task.id} onClick={() => void remove(task)}><Trash2 size={14} /></button></span>
-          {blockingIssues(task).length > 0 && <div className="schedule-compatibility"><strong>需要先完成 fnOS 适配：</strong>{blockingIssues(task).map((issue) => issue.message).join("；")}<small>先点“兼容试运行”查看 NAS 上缺少的脚本或登录态，再点“编辑适配”修改任务内容；确认可以在 fnOS 执行后勾选适配确认并启用。</small></div>}
-          {task.runs.length > 0 && <div className="schedule-runs">{task.runs.slice(0, 3).map((run) => <button key={run.id} disabled={!run.threadId} onClick={() => run.threadId && onOpenThread(run.threadId, task.projectId)} title={run.error || run.output || "打开结果会话"}>{run.status === "running" ? <LoaderCircle size={12} className="spin" /> : run.status === "succeeded" ? <CheckCircle2 size={12} /> : <XCircle size={12} />}<span>{timeText(run.startedAt)}</span><em>{run.status === "running" ? "运行中" : run.status === "succeeded" ? "已完成" : "失败"} · 用时 {durationText(run.startedAt, run.completedAt, now)}</em></button>)}</div>}
-        </article>)}
+        {tasks.map((task) => {
+          const expandedRun = task.runs.find((run) => run.id === expandedRunId);
+          return <article className={`schedule-card ${task.enabled ? "" : "disabled"}`} key={task.id}>
+            <span className="schedule-card-icon"><Clock3 size={18} /></span>
+            <span className="schedule-card-copy"><strong>{task.name}</strong><small>{task.projectName} · {scheduleText(task.schedule)} · {task.networkAccess ? task.sandboxMode === "unrestricted" ? "已关闭 Codex 沙箱" : "项目可写沙箱" : "旧任务只读"}</small><em>{task.sourceAutomationId ? `电脑导入 · ${task.model || "跟随项目"} · ${task.reasoningEffort || "默认思考"} · 记忆 ${Math.ceil(task.memoryBytes / 1024)}KB · ` : ""}下次 {timeText(task.nextRunAt)} · 上次 {timeText(task.lastRunAt)}</em></span>
+            <span className="schedule-card-actions"><label title={task.enabled ? "已启用" : blockingIssues(task).length > 0 ? "完成 fnOS 适配后才能启用" : "已暂停"}><input type="checkbox" checked={task.enabled} disabled={busyId === task.id || (!task.enabled && blockingIssues(task).length > 0)} onChange={() => void toggle(task)} />{task.enabled ? "启用" : "暂停"}</label><button className="secondary-button compact" disabled={Boolean(busyId)} onClick={() => void run(task)}><Play size={13} /> {blockingIssues(task).length > 0 ? "兼容试运行" : "立即运行"}</button><button className="secondary-button compact" onClick={() => { setForm(formFromTask(task)); setEditing(true); }}><Wrench size={13} /> {blockingIssues(task).length > 0 ? "编辑适配" : "编辑"}</button><button className="icon-button small danger" title="删除" disabled={busyId === task.id} onClick={() => void remove(task)}><Trash2 size={14} /></button></span>
+            {blockingIssues(task).length > 0 && <div className="schedule-compatibility"><strong>需要先完成 fnOS 适配：</strong>{blockingIssues(task).map((issue) => issue.message).join("；")}<small>先点“兼容试运行”查看 NAS 上缺少的脚本或登录态，再点“编辑适配”修改任务内容；确认可以在 fnOS 执行后勾选适配确认并启用。</small></div>}
+            {task.runs.length > 0 && <div className="schedule-runs">{task.runs.slice(0, 3).map((run) => <button className={run.id === expandedRunId ? "active" : ""} key={run.id} onClick={() => setExpandedRunId((current) => current === run.id ? null : run.id)} title="展开本批次运行诊断">{run.status === "running" ? <LoaderCircle size={12} className="spin" /> : run.status === "succeeded" ? <CheckCircle2 size={12} /> : <XCircle size={12} />}<span>{timeText(run.startedAt)}</span><em>{run.status === "running" ? "运行中" : run.status === "succeeded" ? "已完成" : "失败"} · {phaseText(run.phase)} · {durationText(run.startedAt, run.completedAt, now)}</em><ChevronDown size={11} /></button>)}</div>}
+            {expandedRun && <div className="schedule-run-detail">
+              <header><span><strong>独立批次 {expandedRun.id.slice(0, 8)}</strong><small>{phaseText(expandedRun.phase)} · 最后记录 {timeText(expandedRun.lastEventAt)}</small></span>{expandedRun.threadId && <button className="secondary-button compact" onClick={() => onOpenThread(expandedRun.threadId as string, task.projectId)}><MessageSquareText size={13} /> 打开结果会话</button>}</header>
+              {expandedRun.error && <pre className="schedule-run-error">{expandedRun.error}</pre>}
+              <ol>{expandedRun.diagnostics.slice(-12).map((entry, index) => <li key={`${entry.at}-${entry.method}-${index}`}><time>{timeText(entry.at)}</time><span><strong>{phaseText(entry.phase)}</strong><small>{entry.summary || entry.method}</small></span></li>)}</ol>
+              <footer>本批次的失败不会计入下一次定时触发；下一次仍从全新批次开始。</footer>
+            </div>}
+          </article>;
+        })}
         {!loading && tasks.length === 0 && <div className="schedule-empty"><CalendarClock size={28} /><strong>还没有定时任务</strong><span>例如：每天 09:00 联网同步数据并把报告写入当前项目。</span></div>}
       </div>
     </> : <form className="schedule-form" onSubmit={(event) => void save(event)}>

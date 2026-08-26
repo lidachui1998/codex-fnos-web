@@ -130,16 +130,26 @@ test("supports explicit unrestricted tasks while preserving default and legacy i
         turn: { status: "completed", items: [{ type: "agentMessage", text: "All good" }] },
       },
     });
-    assert.deepEqual(readTask().runs[0], {
-      id: readTask().runs[0].id,
+    const completedRun = readTask().runs[0];
+    assert.deepEqual(completedRun, {
+      id: completedRun.id,
       threadId: "thread-scheduled",
       turnId: "turn-scheduled",
       status: "succeeded",
       output: "All good",
       error: null,
-      startedAt: readTask().runs[0].startedAt,
-      completedAt: readTask().runs[0].completedAt,
+      phase: "completed",
+      lastEventAt: completedRun.lastEventAt,
+      diagnostics: completedRun.diagnostics,
+      startedAt: completedRun.startedAt,
+      completedAt: completedRun.completedAt,
     });
+    assert.deepEqual(completedRun.diagnostics.map(({ phase, method, summary }) => ({ phase, method, summary })), [
+      { phase: "starting", method: "run/started", summary: "已创建独立运行批次" },
+      { phase: "thread_started", method: "thread/started", summary: "会话 thread-scheduled" },
+      { phase: "turn_started", method: "turn/started", summary: "主任务 turn-scheduled" },
+      { phase: "completed", method: "turn/completed", summary: "主任务已完成" },
+    ]);
 
     const workspaceTask = service.save({
       name: "Workspace check",
@@ -178,6 +188,24 @@ test("supports explicit unrestricted tasks while preserving default and legacy i
       { method: "turn/start", sandbox: undefined, sandboxPolicy: { type: "readOnly" } },
     ]);
     assert.equal(stores.getThreadPreferences("thread-scheduled").networkAccess, false);
+
+    const joinTask = service.save({
+      name: "Subagent check",
+      projectId: project.id,
+      prompt: "Delegate and summarize",
+      schedule: { type: "daily", time: "11:00" },
+      enabled: true,
+    });
+    stores.db.prepare("UPDATE scheduled_runs SET started_at = started_at - 10 WHERE status = 'running'").run();
+    const firstJoinRun = await service.runNow(joinTask.id);
+    service.handleSubagentJoin({ threadId: firstJoinRun.threadId, status: "waiting", activeCount: 2 });
+    service.handleSubagentJoin({ threadId: firstJoinRun.threadId, status: "failed", activeCount: 0, error: "主任务自动收口失败" });
+    const failedJoinRun = service.list().find((item) => item.id === joinTask.id).runs[0];
+    assert.equal(failedJoinRun.status, "failed");
+    assert.equal(failedJoinRun.phase, "subagents_failed");
+    assert.match(failedJoinRun.error, /自动收口失败/);
+    const freshRun = await service.runNow(joinTask.id);
+    assert.notEqual(freshRun.runId, firstJoinRun.runId);
   } finally {
     service.close();
     db.close();

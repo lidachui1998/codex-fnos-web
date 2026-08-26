@@ -189,6 +189,9 @@ export type ScheduledRun = {
   status: "running" | "succeeded" | "failed";
   output?: string | null;
   error?: string | null;
+  phase: string;
+  lastEventAt?: number | null;
+  diagnostics: Array<{ at: number; phase: string; method: string; summary?: string | null }>;
   startedAt: number;
   completedAt?: number | null;
 };

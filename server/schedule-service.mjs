@@ -7,6 +7,31 @@ import { computeNextRun, normalizeSchedule } from "./schedule-rules.mjs";
 export { computeNextRun, normalizeSchedule } from "./schedule-rules.mjs";
 
 const now = () => Math.floor(Date.now() / 1000);
+const diagnosticLimit = 40;
+
+function parseDiagnostics(value) {
+  try {
+    const parsed = JSON.parse(value || "[]");
+    return Array.isArray(parsed) ? parsed.slice(-diagnosticLimit) : [];
+  } catch {
+    return [];
+  }
+}
+
+function detailedError(error, fallback) {
+  if (typeof error === "string") return error.slice(0, 8_000);
+  if (!error || typeof error !== "object") return fallback;
+  return [error.message, error.additionalDetails, error.codexErrorInfo]
+    .filter((value) => typeof value === "string" && value.trim())
+    .join("\n\n")
+    .slice(0, 8_000) || fallback;
+}
+
+function itemSummary(item) {
+  if (!item || typeof item !== "object") return null;
+  const value = item.command || item.name || item.tool || item.text || item.status;
+  return value === undefined || value === null ? null : String(value).trim().slice(0, 500) || null;
+}
 
 function publicTask(row, projectName, runs = []) {
   return {
@@ -37,6 +62,9 @@ function publicTask(row, projectName, runs = []) {
       status: run.status,
       output: run.output,
       error: run.error,
+      phase: run.phase,
+      lastEventAt: run.last_event_at,
+      diagnostics: parseDiagnostics(run.diagnostics_json),
       startedAt: run.started_at,
       completedAt: run.completed_at,
     })),
@@ -57,9 +85,20 @@ export class ScheduleService {
     this.subagentJoins = subagentJoins;
     this.onChanged = onChanged;
     this.ticking = false;
-    this.stores.db.prepare(`
-      UPDATE scheduled_runs SET status = 'failed', error = ?, completed_at = ? WHERE status = 'running'
-    `).run("应用服务在任务完成前重启", now());
+    for (const run of this.stores.db.prepare("SELECT * FROM scheduled_runs WHERE status = 'running'").all()) {
+      const timestamp = now();
+      const diagnostics = [...parseDiagnostics(run.diagnostics_json), {
+        at: timestamp,
+        phase: "service_restarted",
+        method: "service/restarted",
+        summary: "应用服务在任务完成前重启；本批次已结束，不影响下次触发",
+      }].slice(-diagnosticLimit);
+      this.stores.db.prepare(`
+        UPDATE scheduled_runs
+        SET status = 'failed', phase = 'service_restarted', error = ?, diagnostics_json = ?, last_event_at = ?, completed_at = ?
+        WHERE id = ?
+      `).run("应用服务在任务完成前重启；仅结束本批次，下次触发仍会创建全新批次", JSON.stringify(diagnostics), timestamp, timestamp, run.id);
+    }
     this.eventHandler = (event) => this.#handleBridgeEvent(event);
     bridge.on("event", this.eventHandler);
     this.timer = setInterval(() => void this.tick(), 15_000);
@@ -235,8 +274,9 @@ export class ScheduleService {
     const memoryContext = importedMemory ? importedMemory.slice(-16_000) : "";
     const runId = randomUUID();
     this.stores.db.prepare(`
-      INSERT INTO scheduled_runs (id, task_id, status, started_at) VALUES (?, ?, 'running', ?)
-    `).run(runId, task.id, now());
+      INSERT INTO scheduled_runs (id, task_id, status, phase, last_event_at, diagnostics_json, started_at)
+      VALUES (?, ?, 'running', 'starting', ?, ?, ?)
+    `).run(runId, task.id, now(), JSON.stringify([{ at: now(), phase: "starting", method: "run/started", summary: "已创建独立运行批次" }]), now());
     try {
       const started = await this.bridge.request("thread/start", {
         cwd: project.path,
@@ -267,7 +307,7 @@ ${memoryContext}` : ""}`,
       this.stores.saveThreadApprovalPolicy(threadId, "never");
       this.stores.saveThreadNetworkAccess(threadId, unattendedAccess);
       this.stores.saveThreadProjectId(threadId, project.id);
-      this.stores.db.prepare("UPDATE scheduled_runs SET thread_id = ? WHERE id = ?").run(threadId, runId);
+      this.#recordMilestone(runId, "thread_started", "thread/started", `会话 ${threadId}`, { threadId });
       const turn = await this.bridge.request("turn/start", {
         threadId,
         clientUserMessageId: `schedule-${runId}`,
@@ -281,13 +321,13 @@ ${memoryContext}` : ""}`,
         model: provider?.model || task.model || undefined,
         effort: task.reasoning_effort || undefined,
       });
-      this.stores.db.prepare("UPDATE scheduled_runs SET turn_id = ? WHERE id = ?").run(turn.turn.id, runId);
+      this.#recordMilestone(runId, "turn_started", "turn/started", `主任务 ${turn.turn.id}`, { turnId: turn.turn.id });
       this.onChanged();
       return { runId, threadId, turnId: turn.turn.id };
     } catch (error) {
       this.stores.db.prepare(`
-        UPDATE scheduled_runs SET status = 'failed', error = ?, completed_at = ? WHERE id = ?
-      `).run(error.message || "任务启动失败", now(), runId);
+        UPDATE scheduled_runs SET status = 'failed', phase = 'start_failed', error = ?, last_event_at = ?, completed_at = ? WHERE id = ?
+      `).run(detailedError(error, "任务启动失败"), now(), now(), runId);
       this.notifications?.recordScheduledFailure(runId, error);
       this.onChanged();
       throw error;
@@ -300,9 +340,17 @@ ${memoryContext}` : ""}`,
     if (!threadId) return;
     const run = this.stores.db.prepare("SELECT * FROM scheduled_runs WHERE thread_id = ? AND status = 'running' ORDER BY started_at DESC LIMIT 1").get(threadId);
     if (!run) return;
+    if (["turn/started", "item/started", "item/completed"].includes(event.method)) {
+      const item = event.params?.item;
+      const phase = event.method === "turn/started" ? "turn_started" : event.method === "item/started" ? `item_${item?.type || "running"}` : "item_completed";
+      this.#recordMilestone(run.id, phase, event.method, itemSummary(item));
+    }
     if (event.method === "error" && !event.params?.willRetry) {
-      this.stores.db.prepare("UPDATE scheduled_runs SET status = 'failed', error = ?, completed_at = ? WHERE id = ?")
-        .run(String(event.params?.error?.message || event.params?.error || "定时任务执行失败"), now(), run.id);
+      const message = detailedError(event.params?.error, "定时任务执行失败");
+      this.#recordMilestone(run.id, "failed", "error", message);
+      this.stores.db.prepare("UPDATE scheduled_runs SET status = 'failed', phase = 'failed', error = ?, last_event_at = ?, completed_at = ? WHERE id = ?")
+        .run(message, now(), now(), run.id);
+      this.notifications?.recordScheduledFailure(run.id, new Error(message));
       this.onChanged();
       return;
     }
@@ -317,14 +365,17 @@ ${memoryContext}` : ""}`,
     const turn = event.params?.turn || {};
     const succeeded = turn.status === "completed";
     this.stores.db.prepare(`
-      UPDATE scheduled_runs SET status = ?, output = ?, error = ?, completed_at = ? WHERE id = ?
+      UPDATE scheduled_runs SET status = ?, phase = ?, output = ?, error = ?, last_event_at = ?, completed_at = ? WHERE id = ?
     `).run(
       succeeded ? "succeeded" : "failed",
+      succeeded ? "completed" : "failed",
       turnOutput(turn),
-      succeeded ? null : String(turn.error?.message || turn.error || `任务状态：${turn.status || "unknown"}`),
+      succeeded ? null : detailedError(turn.error, `任务状态：${turn.status || "unknown"}`),
+      now(),
       now(),
       run.id,
     );
+    this.#recordMilestone(run.id, succeeded ? "completed" : "failed", "turn/completed", succeeded ? "主任务已完成" : detailedError(turn.error, `任务状态：${turn.status || "unknown"}`));
     const memory = this.stores.db.prepare("SELECT memory_text FROM scheduled_tasks WHERE id = ?").get(run.task_id)?.memory_text;
     if (memory !== null && memory !== undefined) {
       const summary = succeeded ? turnOutput(turn) || "任务已完成" : String(turn.error?.message || turn.error || turn.status || "任务失败");
@@ -334,5 +385,33 @@ ${memoryContext}` : ""}`,
       this.stores.db.prepare("UPDATE scheduled_tasks SET memory_text = ?, updated_at = ? WHERE id = ?").run(bounded, now(), run.task_id);
     }
     this.onChanged();
+  }
+
+  handleSubagentJoin(state) {
+    const run = state?.threadId
+      ? this.stores.db.prepare("SELECT * FROM scheduled_runs WHERE thread_id = ? AND status = 'running' ORDER BY started_at DESC LIMIT 1").get(state.threadId)
+      : null;
+    if (!run) return;
+    const summary = state.error || (state.activeCount ? `${state.activeCount} 个子代理仍在运行或等待` : "子代理已退出运行状态");
+    this.#recordMilestone(run.id, `subagents_${state.status}`, "subagents/join", summary, state.turnId ? { turnId: state.turnId } : {});
+    if (state.status === "failed") {
+      const message = detailedError(state.error, "子代理结束后主任务自动恢复失败");
+      this.stores.db.prepare("UPDATE scheduled_runs SET status = 'failed', phase = 'subagents_failed', error = ?, last_event_at = ?, completed_at = ? WHERE id = ?")
+        .run(message, now(), now(), run.id);
+      this.notifications?.recordScheduledFailure(run.id, new Error(message));
+    }
+    this.onChanged();
+  }
+
+  #recordMilestone(runId, phase, method, summary = null, columns = {}) {
+    const run = this.stores.db.prepare("SELECT * FROM scheduled_runs WHERE id = ?").get(runId);
+    if (!run) return;
+    const timestamp = now();
+    const diagnostics = [...parseDiagnostics(run.diagnostics_json), { at: timestamp, phase, method, summary }].slice(-diagnosticLimit);
+    const threadId = columns.threadId ?? run.thread_id;
+    const turnId = columns.turnId ?? run.turn_id;
+    this.stores.db.prepare(`
+      UPDATE scheduled_runs SET thread_id = ?, turn_id = ?, phase = ?, last_event_at = ?, diagnostics_json = ? WHERE id = ?
+    `).run(threadId, turnId, phase, timestamp, JSON.stringify(diagnostics), runId);
   }
 }

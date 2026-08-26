@@ -81,11 +81,13 @@ const bridge = new AppServerBridge({
   stores,
 });
 let outbox = null;
+let schedules = null;
 const subagentJoins = new SubagentJoinService({
   stores,
   bridge,
   onChanged: (state) => {
     hub.broadcast({ kind: "subagent_join", ...state, at: Date.now() });
+    schedules?.handleSubagentJoin(state);
     if (state.status === "resumed" || state.status === "failed") outbox?.kick(state.threadId, 350);
   },
 });
@@ -122,7 +124,7 @@ const notifications = new NotificationService({
   },
   onChanged: (summary) => hub.broadcast({ kind: "notification_changed", summary, at: Date.now() }),
 });
-const schedules = new ScheduleService({
+schedules = new ScheduleService({
   stores,
   bridge,
   notifications,
