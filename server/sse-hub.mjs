@@ -67,6 +67,7 @@ export class SseHub {
 
   #eventsAfter(cursor) {
     if (cursor === null) return { events: [], nextCursor: this.cursor, reset: false };
+    if (cursor > this.cursor) return { events: [], nextCursor: this.cursor, reset: true };
     const firstCursor = this.events[0]?.cursor ?? this.cursor + 1;
     if (cursor < firstCursor - 1) return { events: [], nextCursor: this.cursor, reset: true };
     return {

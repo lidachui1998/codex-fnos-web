@@ -78,3 +78,13 @@ test("SSE reconnect replays events after the supplied cursor", () => {
     hub.close();
   }
 });
+
+test("a cursor from an earlier server process requests a transport reset", async () => {
+  const hub = new SseHub({ heartbeatMs: 60_000 });
+  try {
+    const result = await hub.poll(99, AbortSignal.timeout(100));
+    assert.deepEqual(result, { events: [], nextCursor: 0, reset: true });
+  } finally {
+    hub.close();
+  }
+});

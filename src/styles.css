@@ -635,7 +635,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .conversation-tools { position: fixed; z-index: 72; top: calc(58px + env(safe-area-inset-top)); right: 8px; width: min(330px,calc(100vw - 16px)); display: none; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 6px; padding: 9px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); box-shadow: var(--shadow); }
   .conversation-tools.mobile-open { display: grid; }
   .conversation-tools .approval-policy-picker, .conversation-tools .model-picker-wrap { grid-column: span 2; width: 100%; }
-  .conversation-tools .provider-pill, .conversation-tools .approval-policy-picker { width: 100%; }
+  .conversation-tools .provider-pill, .conversation-tools .approval-policy-picker, .conversation-tools .transport-status-button { width: 100%; }
   .conversation-tools > .icon-button { width: 100%; background: var(--panel); }
   .mobile-tools-scrim { position: fixed; z-index: 19; inset: 0; padding: 0; border: 0; background: rgba(0,0,0,.18); backdrop-filter: blur(1px); }
   .model-picker { position: fixed; top: 66px; right: 8px; left: 8px; width: auto; }
@@ -969,6 +969,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .network-access-toggle { height: 34px; display: inline-flex; align-items: center; gap: 5px; padding: 0 9px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); color: var(--muted); cursor: pointer; font-size: 9px; font-weight: 700; white-space: nowrap; }
 .network-access-toggle.enabled { border-color: color-mix(in srgb,var(--accent) 45%,var(--line)); background: var(--accent-soft); color: var(--accent-dark); }
 .network-access-toggle:disabled { opacity: .45; cursor: default; }
+.transport-status-button { height: 34px; display: inline-flex; align-items: center; gap: 5px; padding: 0 9px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); color: var(--muted); cursor: pointer; font-size: 9px; font-weight: 700; white-space: nowrap; }
+.transport-status-button.sse, .transport-status-button.polling { border-color: color-mix(in srgb,var(--accent) 38%,var(--line)); color: var(--accent-dark); }
+.transport-status-button.offline { border-color: color-mix(in srgb,var(--red) 35%,var(--line)); background: var(--danger-soft); color: var(--red); }
+.transport-status-button.reconnecting svg, .transport-status-button.connecting svg { animation: spin 1.2s linear infinite; }
 .conversation-tools > .icon-button { position: relative; }
 .tool-count { position: absolute; top: -4px; right: -4px; min-width: 15px; height: 15px; display: grid; place-items: center; padding: 0 3px; border: 2px solid var(--paper); border-radius: 999px; background: var(--accent); color: #fff; font-size: 7px; font-style: normal; font-weight: 800; }
 .workspace-file-link { padding: 1px 3px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-dark); text-decoration: none; cursor: pointer; }

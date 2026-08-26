@@ -1,6 +1,6 @@
 import { Archive, ArrowDownToLine, ArrowUpToLine, Bell, Bot, Boxes, CalendarClock, Clock3, Code2, CornerDownRight, FileText, Folder, FolderMinus, Image, Menu, MessageSquarePlus, MoreHorizontal, PanelLeft, PanelLeftClose, PanelLeftOpen, Paperclip, Plus, RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Square, Trash2, Wifi, WifiOff, X } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent } from "react";
-import { api, ApiError, connectEvents } from "./api";
+import { api, ApiError, connectEvents, getEventTransportState, resetEventTransport, subscribeEventTransport, type EventTransportState } from "./api";
 import { createClientId } from "./client-id";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { LoginScreen } from "./components/LoginScreen";
@@ -173,6 +173,14 @@ function friendlyTime(seconds: number) {
   return date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
 }
 
+function eventTransportLabel(mode: EventTransportState["mode"]) {
+  if (mode === "sse") return "SSE";
+  if (mode === "polling") return "轮询";
+  if (mode === "offline") return "离线";
+  if (mode === "reconnecting") return "重连中";
+  return "连接中";
+}
+
 function outgoingFromItem(item: ThreadItem, skills: Skill[]): OutgoingMessage {
   const textParts = item.content?.filter((part) => part.type === "text").map((part) => part.text ?? "") ?? [];
   const joined = textParts.join("\n");
@@ -204,6 +212,8 @@ export default function App() {
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
   const [authError, setAuthError] = useState("");
   const [fatalError, setFatalError] = useState("");
+  const [eventTransport, setEventTransport] = useState<EventTransportState>(() => getEventTransportState());
+  const [transportRevision, setTransportRevision] = useState(0);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
@@ -641,6 +651,8 @@ export default function App() {
     if (authMode === "authenticated" && bootstrap?.activeAccountId) void loadQueuedMessages();
   }, [authMode, bootstrap?.activeAccountId, loadQueuedMessages]);
 
+  useEffect(() => subscribeEventTransport(setEventTransport), []);
+
   const flushDeltas = useCallback(() => {
     const queued = new Map(deltaQueue.current);
     deltaQueue.current.clear();
@@ -658,10 +670,74 @@ export default function App() {
     });
   }, []);
 
+  const resyncSelectedThread = useCallback(async () => {
+    const threadId = selectedThreadRef.current;
+    if (!threadId) return;
+    try {
+      const result = await api<{ thread: Thread; activeTurnId?: string | null; activeTurnStartedAt?: number | null; model: string; modelProvider: string; reasoningEffort?: ReasoningEffort | null; approvalPolicy: ApprovalPolicy; networkAccess?: boolean; subagentJoin?: SubagentJoinState | null }>(`/api/threads/${encodeURIComponent(threadId)}/resume`, {
+        method: "POST",
+        body: "{}",
+        cache: "no-store",
+      });
+      if (selectedThreadRef.current !== threadId) return;
+      const resumedThread = {
+        ...result.thread,
+        model: result.model,
+        modelProvider: result.modelProvider,
+        reasoningEffort: result.reasoningEffort,
+        approvalPolicy: result.approvalPolicy,
+        networkAccess: result.networkAccess ?? result.thread.networkAccess ?? true,
+      };
+      const resumedItems = transcript(resumedThread);
+      const cached = conversationCacheRef.current.get(threadId);
+      deltaQueue.current.clear();
+      if (deltaFrame.current !== null) cancelAnimationFrame(deltaFrame.current);
+      deltaFrame.current = null;
+      setStreamingItemId(null);
+      setItems(resumedItems);
+      setThreads((current) => current.some((thread) => thread.id === threadId)
+        ? current.map((thread) => thread.id === threadId ? { ...thread, ...resumedThread } : thread)
+        : [resumedThread, ...current]);
+      conversationCacheRef.current.set(threadId, {
+        items: resumedItems,
+        scrollTop: cached?.scrollTop ?? scrollerRef.current?.scrollTop ?? Number.MAX_SAFE_INTEGER,
+        composer: cached?.composer ?? composerValueRef.current,
+        attachments: cached?.attachments ?? attachmentsRef.current,
+        selectedSkills: cached?.selectedSkills ?? selectedSkillsRef.current,
+      });
+      const activeTurn = [...(resumedThread.turns ?? [])].reverse().find((turn) => turn.status === "inProgress");
+      const restoredTurnId = result.activeTurnId ?? activeTurn?.id ?? null;
+      const resumedRunning = Boolean(restoredTurnId) || (typeof resumedThread.status === "object" && resumedThread.status?.type === "active");
+      const restoredStartedAtMs = Number.isFinite(result.activeTurnStartedAt)
+        ? Number(result.activeTurnStartedAt) * 1000
+        : Number.isFinite(activeTurn?.startedAt) ? Number(activeTurn?.startedAt) * 1000 : resumedRunning ? Date.now() : null;
+      turnRunningRef.current = resumedRunning;
+      setTurnRunning(resumedRunning);
+      activeTurnIdRef.current = restoredTurnId;
+      setActiveTurnId(restoredTurnId);
+      activeTurnStartedAtRef.current = restoredStartedAtMs;
+      setActiveTurnStartedAtMs(restoredStartedAtMs);
+      const restoredJoin = result.subagentJoin ?? null;
+      subagentJoinWaitingRef.current = Boolean(restoredJoin);
+      setSubagentJoin(restoredJoin);
+      setSelectedProviderId(threadProviderId(resumedThread));
+      if (result.model) setSelectedModel(result.model);
+      setSelectedEffort(result.reasoningEffort ?? "");
+      setSelectedApprovalPolicy(result.approvalPolicy ?? "on-request");
+      setSelectedNetworkAccess(Boolean(result.networkAccess ?? result.thread.networkAccess ?? true));
+      setFatalError("");
+    } catch (reason) {
+      if (selectedThreadRef.current !== threadId) return;
+      if (reason instanceof DOMException && reason.name === "AbortError") return;
+      setFatalError(reason instanceof Error ? `会话重新同步失败：${reason.message}` : "会话重新同步失败");
+    }
+  }, []);
+
   const handleEvent = useCallback((raw: unknown) => {
     const event = raw as AppEvent;
     if (event.kind === "transport_reset") {
-      window.location.reload();
+      void loadBootstrap();
+      void resyncSelectedThread();
       return;
     }
     if (event.kind === "bridge_state") {
@@ -827,7 +903,7 @@ export default function App() {
       setActiveTurnStartedAtMs(null);
       setStreamingItemId(null);
     }
-  }, [flushDeltas, loadBootstrap, loadQueuedMessages, selectedProjectId]);
+  }, [flushDeltas, loadBootstrap, loadQueuedMessages, resyncSelectedThread, selectedProjectId]);
 
   useEffect(() => {
     if (!eventsEnabled) return;
@@ -847,7 +923,28 @@ export default function App() {
       controller.abort();
       if (retry) clearTimeout(retry);
     };
-  }, [eventsEnabled, handleEvent]);
+  }, [eventsEnabled, handleEvent, transportRevision]);
+
+  const reconnectEventTransport = useCallback(() => {
+    resetEventTransport();
+    setTransportRevision((current) => current + 1);
+  }, []);
+
+  useEffect(() => {
+    const recover = () => {
+      reconnectEventTransport();
+      void resyncSelectedThread();
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") recover();
+    };
+    window.addEventListener("online", recover);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("online", recover);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [reconnectEventTransport, resyncSelectedThread]);
 
   const loadThreads = useCallback(async (project: Project | null) => {
     const requestId = ++threadListRequestRef.current;
@@ -1723,6 +1820,7 @@ export default function App() {
           <div className={`conversation-tools ${mobileToolsOpen ? "mobile-open" : ""}`}>
             <label className="approval-policy-picker" title="当前会话的命令审批策略"><ShieldCheck size={15} /><select value={selectedApprovalPolicy} disabled={!selectedProject || conversationBusy} onChange={(event) => void selectApprovalPolicy(event.target.value as ApprovalPolicy)}><option value="on-request">需要审批</option><option value="never">自动审批</option></select></label>
             <button className={`network-access-toggle ${selectedNetworkAccess ? "enabled" : ""}`} disabled={!selectedProject || conversationBusy} title={selectedNetworkAccess ? "当前会话允许命令访问网络；应用代理会传给 Codex" : "当前会话的命令网络访问被沙箱阻止"} onClick={() => void selectNetworkAccess(!selectedNetworkAccess)}>{selectedNetworkAccess ? <Wifi size={14} /> : <WifiOff size={14} />}<span>{selectedNetworkAccess ? "允许联网" : "禁止联网"}</span></button>
+            <button className={`transport-status-button ${eventTransport.mode}`} title={`${eventTransportLabel(eventTransport.mode)}${eventTransport.lastEventAt ? ` · 最近响应 ${new Date(eventTransport.lastEventAt).toLocaleTimeString()}` : ""}${eventTransport.error ? ` · ${eventTransport.error}` : ""}；点击重新连接并同步当前会话`} onClick={reconnectEventTransport}>{eventTransport.mode === "offline" ? <WifiOff size={14} /> : eventTransport.mode === "sse" || eventTransport.mode === "polling" ? <Wifi size={14} /> : <RefreshCw size={14} />}<span>{eventTransportLabel(eventTransport.mode)}</span></button>
             <ModelPicker
               bootstrap={bootstrap}
               open={modelPickerOpen}

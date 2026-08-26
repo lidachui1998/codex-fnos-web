@@ -29,8 +29,60 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 type PolledEvent = { cursor: number; event: unknown };
 type PollResponse = { events: PolledEvent[]; nextCursor: number; reset: boolean };
 
-let preferPolling = false;
+export type EventTransportState = {
+  mode: "connecting" | "sse" | "polling" | "offline" | "reconnecting";
+  lastEventAt: number | null;
+  error: string | null;
+};
+
+let preferPollingUntil = 0;
 let lastEventCursor: number | null = null;
+let transportState: EventTransportState = { mode: "connecting", lastEventAt: null, error: null };
+const transportListeners = new Set<(state: EventTransportState) => void>();
+
+function updateTransport(next: Partial<EventTransportState>) {
+  transportState = { ...transportState, ...next };
+  for (const listener of transportListeners) listener(transportState);
+}
+
+export function getEventTransportState() {
+  return transportState;
+}
+
+export function subscribeEventTransport(listener: (state: EventTransportState) => void) {
+  transportListeners.add(listener);
+  listener(transportState);
+  return () => {
+    transportListeners.delete(listener);
+  };
+}
+
+export function resetEventTransport() {
+  preferPollingUntil = 0;
+  updateTransport({ mode: "reconnecting", error: null });
+}
+
+function waitUntilOnline(signal: AbortSignal) {
+  if (typeof navigator === "undefined" || navigator.onLine !== false) return Promise.resolve();
+  updateTransport({ mode: "offline", error: "设备当前离线" });
+  return new Promise<void>((resolve) => {
+    const cleanup = () => {
+      window.removeEventListener("online", online);
+      signal.removeEventListener("abort", abort);
+    };
+    const online = () => {
+      cleanup();
+      updateTransport({ mode: "reconnecting", error: null });
+      resolve();
+    };
+    const abort = () => {
+      cleanup();
+      resolve();
+    };
+    window.addEventListener("online", online, { once: true });
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
 
 async function loadEventCheckpoint(signal: AbortSignal) {
   const data = await api<PollResponse>("/api/events/poll", { cache: "no-store", signal });
@@ -45,6 +97,7 @@ function waitForEventSource(onEvent: (event: unknown) => void, signal: AbortSign
     }
     const query = lastEventCursor === null ? "" : `?cursor=${encodeURIComponent(lastEventCursor)}`;
     const source = new EventSource(`/events${query}`, { withCredentials: true });
+    updateTransport({ mode: "connecting", error: null });
     let connected = false;
     const timeout = window.setTimeout(() => {
       cleanup();
@@ -59,9 +112,15 @@ function waitForEventSource(onEvent: (event: unknown) => void, signal: AbortSign
       cleanup();
       resolve();
     };
+    source.onopen = () => {
+      connected = true;
+      clearTimeout(timeout);
+      updateTransport({ mode: "sse", lastEventAt: Date.now(), error: null });
+    };
     source.onmessage = (message) => {
       connected = true;
       clearTimeout(timeout);
+      updateTransport({ mode: "sse", lastEventAt: Date.now(), error: null });
       const cursor = message.lastEventId.trim() ? Number(message.lastEventId) : null;
       if (cursor !== null && Number.isSafeInteger(cursor) && cursor >= 0) lastEventCursor = cursor;
       try {
@@ -72,7 +131,9 @@ function waitForEventSource(onEvent: (event: unknown) => void, signal: AbortSign
     };
     source.onerror = () => {
       cleanup();
-      reject(new Error(connected ? "SSE 连接已断开" : "SSE 连接失败"));
+      const error = new Error(connected ? "SSE 连接已断开" : "SSE 连接失败");
+      updateTransport({ mode: "reconnecting", error: error.message });
+      reject(error);
     };
     signal.addEventListener("abort", abort, { once: true });
     if (signal.aborted) abort();
@@ -81,18 +142,35 @@ function waitForEventSource(onEvent: (event: unknown) => void, signal: AbortSign
 
 async function pollEvents(onEvent: (event: unknown) => void, signal: AbortSignal) {
   let cursor = lastEventCursor;
+  updateTransport({ mode: "polling", error: null });
   while (!signal.aborted) {
     const query = cursor === null ? "" : `?cursor=${encodeURIComponent(cursor)}`;
-    const response = await fetch(`/api/events/poll${query}`, {
-      cache: "no-store",
-      credentials: "same-origin",
-      signal,
-    });
+    let response: Response;
+    try {
+      response = await fetch(`/api/events/poll${query}`, {
+        cache: "no-store",
+        credentials: "same-origin",
+        signal,
+      });
+    } catch (reason) {
+      if (!signal.aborted) updateTransport({
+        mode: typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "reconnecting",
+        error: reason instanceof Error ? reason.message : "事件连接失败",
+      });
+      throw reason;
+    }
     const data = await response.json().catch(() => ({})) as Partial<PollResponse> & { error?: { message?: string; details?: unknown } };
     if (!response.ok) {
-      throw new ApiError(data.error?.message ?? `事件轮询失败 (${response.status})`, response.status, data.error?.details);
+      const message = data.error?.message ?? `事件轮询失败 (${response.status})`;
+      updateTransport({ mode: "reconnecting", error: message });
+      throw new ApiError(message, response.status, data.error?.details);
     }
-    if (data.reset) onEvent({ kind: "transport_reset" });
+    updateTransport({ mode: "polling", lastEventAt: Date.now(), error: null });
+    if (data.reset) {
+      cursor = Number.isSafeInteger(data.nextCursor) ? Number(data.nextCursor) : null;
+      lastEventCursor = cursor;
+      onEvent({ kind: "transport_reset" });
+    }
     for (const entry of data.events ?? []) {
       if (!Number.isSafeInteger(entry.cursor) || entry.cursor < 0) continue;
       cursor = Math.max(cursor ?? 0, entry.cursor);
@@ -100,7 +178,7 @@ async function pollEvents(onEvent: (event: unknown) => void, signal: AbortSignal
       onEvent(entry.event);
     }
     if (Number.isSafeInteger(data.nextCursor) && Number(data.nextCursor) >= 0) {
-      cursor = Math.max(cursor ?? 0, Number(data.nextCursor));
+      cursor = data.reset ? Number(data.nextCursor) : Math.max(cursor ?? 0, Number(data.nextCursor));
       lastEventCursor = cursor;
     }
   }
@@ -110,14 +188,16 @@ export async function connectEvents(
   onEvent: (event: unknown) => void,
   signal: AbortSignal,
 ) {
-  if (!preferPolling) {
+  await waitUntilOnline(signal);
+  if (signal.aborted) return;
+  if (Date.now() >= preferPollingUntil) {
     try {
       if (lastEventCursor === null) await loadEventCheckpoint(signal);
       await waitForEventSource(onEvent, signal);
       if (signal.aborted) return;
     } catch (reason) {
       if (signal.aborted) return;
-      preferPolling = true;
+      preferPollingUntil = Date.now() + 30 * 60_000;
       if (reason instanceof ApiError && reason.status === 401) throw reason;
     }
   }
