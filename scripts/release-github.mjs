@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -61,7 +61,13 @@ function runNpm(args) {
   if (!npmCli || !existsSync(npmCli)) {
     throw new Error("请通过 npm run release:github 启动发布脚本，以便复用当前 npm-cli.js");
   }
-  run(process.execPath, [npmCli, ...args]);
+  run(process.execPath, [npmCli, ...args], {
+    env: {
+      ...process.env,
+      PATH: `${dirname(process.execPath)}${delimiter}${process.env.PATH || ""}`,
+      npm_node_execpath: process.execPath,
+    },
+  });
 }
 
 function remoteTagExists() {
