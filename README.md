@@ -5,10 +5,10 @@
   <p>原生飞牛桌面体验 · 实时对话控制 · 后台定时任务 · Skills 与插件 · 多模型供应商</p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-0.9.11-0f9f7f?style=flat-square" alt="Version 0.9.11">
+    <img src="https://img.shields.io/badge/version-0.9.12-0f9f7f?style=flat-square" alt="Version 0.9.12">
     <img src="https://img.shields.io/badge/fnOS-x86__64-1f2937?style=flat-square" alt="fnOS x86_64">
     <img src="https://img.shields.io/badge/Node.js-24%2B-3c873a?style=flat-square" alt="Node.js 24+">
-    <img src="https://img.shields.io/badge/tests-91%20passed-0f9f7f?style=flat-square" alt="91 tests passed">
+    <img src="https://img.shields.io/badge/tests-97%20passed-0f9f7f?style=flat-square" alt="97 tests passed">
   </p>
 
   <p>
@@ -40,13 +40,13 @@ Codex 飞牛工作台把这些环节放进同一个 fnOS 应用：
 
 ## 核心能力
 
-| 能力 | 0.9.11 中的实现 |
+| 能力 | 0.9.12 中的实现 |
 | --- | --- |
-| 实时对话控制 | 流式回答、中断、官方 `turn/steer` 立即追加、等待队列自动发送；队列项也可手动提前发送 |
-| 飞牛 App 兼容 | 标准 SSE 实时通道；嵌入式 WebView 首包异常时自动切换带游标补发的 HTTP 长轮询，页面重开可恢复进行中的回复 |
+| 实时对话控制 | 流式回答、中断、官方 `turn/steer` 立即追加；等待队列持久化在 NAS，关闭页面后仍会自动续发，也可手动提前发送 |
+| 飞牛 App 兼容 | 标准 SSE 实时通道；嵌入式 WebView 自动降级为 Fetch 长轮询，断网、回前台与服务重启后自动重连并同步当前会话 |
 | 会话管理 | 创建、恢复、重命名、置顶、归档、删除、全局搜索、重新发送、重新生成与编辑并分支 |
-| 新会话与子代理 | Codex 可通过工作台入口显式创建新会话；原生子代理由 Codex 按任务自主委派，服务端确保主任务等待全部子代理收口并自动继续汇总；右侧面板基于真实子会话状态展示运行、等待批准、等待输入、完成与异常，并可快速切换完整会话 |
-| fnOS 后台自动化 | 每隔一段时间、每天或每周执行；每次运行保存为新会话，支持桌面 Codex 自动化导入 |
+| 新会话与子代理 | Codex 可显式创建新会话；原生子代理由 Codex 自主委派，主任务等待全部子代理收口；右侧面板可查看完整会话、追加指令、停止、重试，并直接处理批准与输入请求 |
+| fnOS 后台自动化 | 每隔一段时间、每天或每周执行；每次触发创建独立批次和新会话，记录最后阶段、子代理收口、精确错误与运行时间线 |
 | NAS 文件工作流 | 项目文件、Git diff 与常见产物预览；调用官方 `openFile` / `openFileManager` 打开或定位文件 |
 | Skills 与插件 | 搜索、预览、智能调用、`@` 强制指定；支持 GitHub、`SKILL.md`、ZIP 与标准插件包导入 |
 | 模型与账号 | OpenAI / ChatGPT 设备码或 API Key 登录，多账号隔离；第三方 Responses 与 Chat Completions 自动适配 |
@@ -76,7 +76,8 @@ Codex 飞牛工作台把这些环节放进同一个 fnOS 应用：
 - 支持固定间隔、每天和每周计划，使用 NAS 系统时区。
 - 可导入电脑 Codex 的 `automation.toml` 与 `memory.md`，保留 RRULE、模型、思考强度、提示词和记忆。
 - Windows 路径、PowerShell、桌面浏览器登录态和原生工具会先做 fnOS 兼容检查；有阻塞时完整保存但自动暂停。
-- 每次触发创建独立的新会话，应用停止或 NAS 关机时不会伪装成已执行。
+- 每次触发创建独立的新会话和批次；旧失败不占用新批次重试次数，应用停止或 NAS 关机时不会伪装成已执行。
+- 运行诊断会展示最后阶段、主会话/子代理收口状态、精确错误与最近 12 个里程碑，可直接打开结果会话继续排查。
 - 任务状态进入通知中心，并可按需转发到飞书或 Hermes。
 
 ## Skills、插件与项目上下文
