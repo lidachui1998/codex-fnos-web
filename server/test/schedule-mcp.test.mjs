@@ -15,8 +15,9 @@ function fixture() {
   const db = openDatabase(databasePath);
   const stores = new Stores(db, Buffer.alloc(32, 7), [root]);
   const project = stores.saveProject({ name: "NAS project", path: workspace, create: false });
+  const provider = stores.saveProvider({ name: "Private AI", baseUrl: "https://ai.example/v1", model: "provider-default", apiKey: "secret", enabled: true });
   db.close();
-  return { root, workspace, databasePath, project };
+  return { root, workspace, databasePath, project, provider };
 }
 
 test("creates and lists a scheduled task through the local MCP store", () => {
@@ -35,8 +36,55 @@ test("creates and lists a scheduled task through the local MCP store", () => {
     assert.deepEqual(created.schedule, { type: "daily", time: "09:00" });
     assert.equal(created.enabled, true);
     assert.equal(created.networkAccess, true);
+    assert.equal(created.providerMode, "follow");
+    assert.equal(created.model, null);
     assert.ok(created.nextRunAt > Math.floor(Date.now() / 1000));
     assert.deepEqual(store.list(workspace), [created]);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("edits model settings, pauses, and deletes a scheduled task through MCP", () => {
+  const { root, workspace, databasePath, provider } = fixture();
+  const store = new ScheduleToolStore(databasePath);
+  try {
+    const created = store.create({
+      name: "Nightly build",
+      prompt: "Build the package",
+      projectPath: workspace,
+      schedule: { type: "daily", time: "23:00" },
+      providerId: provider.id,
+      model: "provider-special",
+      reasoningEffort: "high",
+      sandboxMode: "unrestricted",
+    });
+    assert.equal(created.providerMode, "provider");
+    assert.equal(created.providerId, provider.id);
+    assert.equal(created.providerName, "Private AI");
+    assert.equal(created.model, "provider-special");
+    assert.equal(created.reasoningEffort, "high");
+    assert.equal(created.sandboxMode, "unrestricted");
+
+    const updated = store.update(created.id, {
+      prompt: "Build and verify the package",
+      schedule: { type: "weekly", time: "22:30", days: [1, 5] },
+      providerId: "openai",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "xhigh",
+      enabled: false,
+    });
+    assert.equal(updated.prompt, "Build and verify the package");
+    assert.deepEqual(updated.schedule, { type: "weekly", time: "22:30", days: [1, 5] });
+    assert.equal(updated.providerMode, "openai");
+    assert.equal(updated.providerName, "OpenAI / ChatGPT");
+    assert.equal(updated.model, "gpt-5.6-sol");
+    assert.equal(updated.reasoningEffort, "xhigh");
+    assert.equal(updated.enabled, false);
+    assert.equal(updated.nextRunAt, null);
+    assert.deepEqual(store.delete(created.id), { deleted: true, id: created.id, name: "Nightly build" });
+    assert.deepEqual(store.list(workspace), []);
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
@@ -53,7 +101,7 @@ test("exposes create and list tool definitions over MCP", () => {
     });
     assert.equal(initialized.serverInfo.name, "fnos-workbench");
     const result = handleScheduleMcpRequest(store, { method: "tools/list" });
-    assert.deepEqual(result.tools.map((tool) => tool.name), ["create_scheduled_task", "list_scheduled_tasks", "create_new_conversation", "create_global_skill", "create_global_plugin"]);
+    assert.deepEqual(result.tools.map((tool) => tool.name), ["create_scheduled_task", "list_scheduled_tasks", "update_scheduled_task", "delete_scheduled_task", "create_new_conversation", "create_global_skill", "create_global_plugin"]);
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });

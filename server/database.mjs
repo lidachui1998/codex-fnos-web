@@ -91,6 +91,8 @@ export function openDatabase(path) {
       enabled INTEGER NOT NULL DEFAULT 1,
       network_access INTEGER NOT NULL DEFAULT 0,
       sandbox_mode TEXT NOT NULL DEFAULT 'workspace' CHECK (sandbox_mode IN ('workspace', 'unrestricted')),
+      provider_mode TEXT NOT NULL DEFAULT 'follow' CHECK (provider_mode IN ('follow', 'openai', 'provider')),
+      provider_id TEXT REFERENCES provider_profiles(id) ON DELETE SET NULL,
       model TEXT,
       reasoning_effort TEXT,
       source_automation_id TEXT,
@@ -224,6 +226,8 @@ export function openDatabase(path) {
   const scheduledTaskColumns = new Set(db.prepare("PRAGMA table_info(scheduled_tasks)").all().map((column) => column.name));
   for (const [column, definition] of [
     ["sandbox_mode", "TEXT NOT NULL DEFAULT 'workspace'"],
+    ["provider_mode", "TEXT NOT NULL DEFAULT 'follow'"],
+    ["provider_id", "TEXT"],
     ["model", "TEXT"],
     ["reasoning_effort", "TEXT"],
     ["source_automation_id", "TEXT"],
@@ -261,6 +265,30 @@ export function openDatabase(path) {
       `).run();
       db.prepare("UPDATE thread_preferences SET network_access = 1, updated_at = ?").run(timestamp);
       db.prepare("INSERT INTO settings (key, value) VALUES ('network_access_default_v1', 'true')").run();
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'background_clarity_v1'").get()) {
+    const appearance = Object.fromEntries(db.prepare(`
+      SELECT key, value FROM settings
+      WHERE key IN ('background_opacity', 'background_blur', 'background_panel_opacity')
+    `).all().map((row) => [row.key, Number(row.value)]));
+    const opacity = Number.isFinite(appearance.background_opacity) ? Math.max(appearance.background_opacity, 0.72) : 0.75;
+    const blur = Number.isFinite(appearance.background_blur) ? Math.min(appearance.background_blur, 2) : 0;
+    const panelOpacity = Number.isFinite(appearance.background_panel_opacity) ? Math.min(appearance.background_panel_opacity, 0.62) : 0.58;
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const saveSetting = db.prepare(`
+        INSERT INTO settings (key, value) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `);
+      saveSetting.run("background_opacity", String(opacity));
+      saveSetting.run("background_blur", String(blur));
+      saveSetting.run("background_panel_opacity", String(panelOpacity));
+      saveSetting.run("background_clarity_v1", "true");
       db.exec("COMMIT");
     } catch (error) {
       db.exec("ROLLBACK");

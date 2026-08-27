@@ -226,7 +226,6 @@ export function SubagentPanel({ rootThreadId, agent, agents, projectPath, pendin
         {!loading && !error && items.length > 0 && <Timeline
           items={items}
           turnRunning={running}
-          activeTurnId={activeTurnId}
           retryProviders={[]}
           retryProviderId=""
           projectPath={thread?.cwd || projectPath}
@@ -234,7 +233,6 @@ export function SubagentPanel({ rootThreadId, agent, agents, projectPath, pendin
           onResend={() => undefined}
           onRegenerate={() => undefined}
           onEditBranch={() => undefined}
-          onOpenSubagent={selectAgent}
           readOnly
         />}
       </div>

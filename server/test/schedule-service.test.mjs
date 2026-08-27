@@ -39,6 +39,7 @@ test("supports explicit unrestricted tasks while preserving default and legacy i
   const db = openDatabase(join(root, "store.sqlite"));
   const stores = new Stores(db, Buffer.alloc(32, 9), [root]);
   const project = stores.saveProject({ name: "NAS project", path: workspace, create: false });
+  const provider = stores.saveProvider({ name: "Private AI", baseUrl: "https://ai.example/v1", model: "provider-default", apiKey: "secret", enabled: true });
   class FakeBridge extends EventEmitter {
     calls = [];
     snapshot() { return { status: "ready" }; }
@@ -85,6 +86,8 @@ test("supports explicit unrestricted tasks while preserving default and legacy i
       schedule: { type: "daily", time: "09:00" },
       enabled: true,
       sandboxMode: "unrestricted",
+      providerMode: "provider",
+      providerId: provider.id,
       model: "gpt-5.6-terra",
       reasoningEffort: "xhigh",
       sourceAutomationId: "desktop-daily-check",
@@ -103,12 +106,13 @@ test("supports explicit unrestricted tasks while preserving default and legacy i
       sandbox: params.sandbox,
       sandboxPolicy: params.sandboxPolicy,
       threadSource: params.threadSource,
+      modelProvider: params.modelProvider,
       model: params.model,
       effort: params.effort,
       config: params.config,
     })), [
-      { method: "thread/start", approvalPolicy: "never", sandbox: "danger-full-access", sandboxPolicy: undefined, threadSource: "automation", model: "gpt-5.6-terra", effort: undefined, config: { "agents.enabled": true, "agents.max_concurrent_threads_per_session": 4, experimental_use_unified_exec_tool: true, background_terminal_max_timeout: 3_600_000, model_reasoning_effort: "xhigh" } },
-      { method: "turn/start", approvalPolicy: "never", sandbox: undefined, sandboxPolicy: { type: "dangerFullAccess" }, threadSource: undefined, model: "gpt-5.6-terra", effort: "xhigh", config: undefined },
+      { method: "thread/start", approvalPolicy: "never", sandbox: "danger-full-access", sandboxPolicy: undefined, threadSource: "automation", modelProvider: `fnos-${provider.id}`, model: "gpt-5.6-terra", effort: undefined, config: { "agents.enabled": true, "agents.max_concurrent_threads_per_session": 4, experimental_use_unified_exec_tool: true, background_terminal_max_timeout: 3_600_000, model_reasoning_effort: "xhigh" } },
+      { method: "turn/start", approvalPolicy: "never", sandbox: undefined, sandboxPolicy: { type: "dangerFullAccess" }, threadSource: undefined, modelProvider: undefined, model: "gpt-5.6-terra", effort: "xhigh", config: undefined },
     ]);
     assert.match(bridge.calls[0].params.developerInstructions, new RegExp(defaultFnosInstructions.slice(0, 30)));
     assert.match(bridge.calls[0].params.developerInstructions, /可以访问任意互联网地址/);
@@ -120,6 +124,9 @@ test("supports explicit unrestricted tasks while preserving default and legacy i
     assert.equal(stores.getThreadPreferences("thread-scheduled").networkAccess, true);
     assert.equal(readTask().networkAccess, true);
     assert.equal(readTask().sandboxMode, "unrestricted");
+    assert.equal(readTask().providerMode, "provider");
+    assert.equal(readTask().providerId, provider.id);
+    assert.equal(readTask().providerName, "Private AI");
     assert.equal(readTask().memoryBytes, Buffer.byteLength("# imported memory"));
 
     bridge.emit("event", {

@@ -3,10 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ThreadItem } from "../types";
-import { collabAgentStates, runningAgentStatuses, subagentStates, type AgentViewState } from "../subagents";
 import { changeKindName, DiffView } from "./DiffView";
-
-export type { AgentViewState } from "../subagents";
 
 function workspaceFileHref(href: string | undefined, projectPath: string) {
   if (!href) return null;
@@ -32,62 +29,6 @@ function userImages(item: ThreadItem) {
   return item.content
     ?.filter((part) => part.type === "image" && typeof part.url === "string" && /^(?:data:image\/(?:png|jpeg|webp|gif);base64,|https?:\/\/)/i.test(part.url))
     .map((part) => part.url as string) ?? [];
-}
-
-function agentStatusLabel(status: string) {
-  return ({
-    pendingInit: "准备中",
-    running: "运行中",
-    inProgress: "运行中",
-    waitingApproval: "等待批准",
-    waitingInput: "等待输入",
-    completed: "已完成",
-    errored: "失败",
-    failed: "失败",
-    interrupted: "已中断",
-    shutdown: "已结束",
-    notFound: "未找到",
-  } as Record<string, string>)[status] ?? status;
-}
-
-function agentDisplayName(state: AgentViewState) {
-  const path = state.path?.split("/").filter(Boolean).at(-1);
-  return state.name?.trim() || state.role?.trim() || path || `子代理 ${state.id.slice(-8)}`;
-}
-
-function collabToolLabel(tool: string | undefined) {
-  return ({
-    spawnAgent: "启动子代理",
-    sendInput: "向子代理追加任务",
-    resumeAgent: "恢复子代理",
-    wait: "等待子代理结果",
-    closeAgent: "关闭子代理",
-  } as Record<string, string>)[tool || ""] ?? "子代理协作";
-}
-
-function SubagentToolItem({ item, resolvedStates, onOpenSubagent }: { item: ThreadItem; resolvedStates: AgentViewState[]; onOpenSubagent?: (state: AgentViewState) => void }) {
-  const [open, setOpen] = useState(false);
-  const states = collabAgentStates(item).map((state) => {
-    const resolved = resolvedStates.find((candidate) => candidate.id === state.id);
-    return resolved ? { ...state, ...resolved } : state;
-  });
-  const running = item.status === "inProgress" || states.some((state) => runningAgentStatuses.has(state.status));
-  const failed = item.status === "failed" || states.some((state) => ["errored", "failed"].includes(state.status));
-  return (
-    <article className={`subagent-card ${running ? "running" : failed ? "failed" : "completed"}`}>
-      <button className="subagent-summary" onClick={() => setOpen(!open)}>
-        <span className="subagent-icon">{running ? <LoaderCircle size={16} /> : failed ? <AlertTriangle size={16} /> : <Bot size={16} />}</span>
-        <span><strong>{collabToolLabel(item.tool)}</strong><small>{states.length > 0 ? `${states.length} 个子代理 · ${states.map((state) => agentStatusLabel(state.status)).join("、")}` : agentStatusLabel(item.status || "completed")}</small></span>
-        <em>{running ? "运行中" : failed ? "异常" : "已完成"}</em>
-        {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-      </button>
-      {open && <div className="subagent-detail">
-        {item.prompt && <p>{item.prompt}</p>}
-        {states.map((state) => <button type="button" key={state.id} onClick={() => onOpenSubagent?.(state)} disabled={!onOpenSubagent} title="在右侧打开子代理会话"><span className={`subagent-state ${state.status}`}>{agentStatusLabel(state.status)}</span><strong>{agentDisplayName(state)}</strong>{state.message && <small>{state.message}</small>}<ChevronRight size={14} /></button>)}
-        {item.model && <footer>模型 {item.model}{item.reasoningEffort ? ` · ${item.reasoningEffort}` : ""}</footer>}
-      </div>}
-    </article>
-  );
 }
 
 function ToolItem({ item }: { item: ThreadItem }) {
@@ -138,9 +79,7 @@ type Props = {
   items: ThreadItem[];
   streamingItemId?: string | null;
   turnRunning?: boolean;
-  activeTurnId?: string | null;
   activeTurnStartedAtMs?: number | null;
-  subagents?: AgentViewState[];
   retryProviders: RetryProviderOption[];
   retryProviderId: string;
   projectPath: string;
@@ -149,7 +88,6 @@ type Props = {
   onResend: (item: ThreadItem, providerId: string) => void;
   onRegenerate: (item: ThreadItem, providerId: string) => void;
   onEditBranch: (item: ThreadItem) => void;
-  onOpenSubagent?: (state: AgentViewState) => void;
   readOnly?: boolean;
 };
 
@@ -178,21 +116,16 @@ function itemDurationMs(item: ThreadItem) {
   return null;
 }
 
-export function Timeline({ items, streamingItemId, turnRunning, activeTurnId, activeTurnStartedAtMs, subagents: providedSubagents, retryProviders, retryProviderId, projectPath, onOpenFile, onSuggestion, onResend, onRegenerate, onEditBranch, onOpenSubagent, readOnly = false }: Props) {
+export function Timeline({ items, streamingItemId, turnRunning, activeTurnStartedAtMs, retryProviders, retryProviderId, projectPath, onOpenFile, onSuggestion, onResend, onRegenerate, onEditBranch, readOnly = false }: Props) {
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [visibleLimit, setVisibleLimit] = useState(140);
   const [retryItemId, setRetryItemId] = useState<string | null>(null);
   const [draftRetryProviderId, setDraftRetryProviderId] = useState(retryProviderId);
   const [nowMs, setNowMs] = useState(Date.now());
-  const renderableItems = useMemo(() => items.filter((item) => item.type !== "reasoning" || item.summary?.some((text) => text.trim())), [items]);
+  const renderableItems = useMemo(() => items.filter((item) => !["collabToolCall", "subAgentActivity"].includes(item.type) && (item.type !== "reasoning" || item.summary?.some((text) => text.trim()))), [items]);
   const hiddenCount = Math.max(0, renderableItems.length - visibleLimit);
   const visibleItems = hiddenCount > 0 ? renderableItems.slice(hiddenCount) : renderableItems;
-  const inferredSubagents = useMemo(() => subagentStates(items, activeTurnId ?? null), [items, activeTurnId]);
-  const subagents = providedSubagents ?? inferredSubagents;
-  const runningSubagents = subagents.filter((state) => runningAgentStatuses.has(state.status));
-  const completedSubagents = subagents.filter((state) => state.status === "completed" || state.status === "shutdown");
-  const failedSubagents = subagents.filter((state) => ["errored", "failed", "interrupted", "notFound"].includes(state.status));
 
   useEffect(() => {
     if (!turnRunning || !activeTurnStartedAtMs) return;
@@ -256,11 +189,6 @@ export function Timeline({ items, streamingItemId, turnRunning, activeTurnId, ac
               : <a {...props} href={href} target="_blank" rel="noreferrer">{children}</a>;
           } }}>{item.text ?? ""}</ReactMarkdown>{streamingItemId === item.id && <span className="stream-caret" />}</div>{!readOnly && streamingItemId !== item.id && <div className="message-actions"><button onClick={() => void copyItem(item, item.text ?? "")}>{copiedId === item.id ? <Check size={13} /> : <Copy size={13} />}{copiedId === item.id ? "已复制" : "复制"}</button>{retryControl(item, "重新生成", onRegenerate, !item.turnId || Boolean(turnRunning))}</div>}</div></article>;
         }
-        if (item.type === "collabToolCall") return <SubagentToolItem item={item} resolvedStates={subagents} key={item.id} onOpenSubagent={onOpenSubagent} />;
-        if (item.type === "subAgentActivity") {
-          const state = subagents.find((entry) => entry.id === item.agentThreadId) ?? { id: item.agentThreadId || "", path: item.agentPath, status: item.kind === "interrupted" ? "interrupted" : turnRunning ? "running" : "completed" };
-          return <button type="button" className="subagent-activity" key={item.id} onClick={() => state.id && onOpenSubagent?.(state)} disabled={!state.id || !onOpenSubagent} title="在右侧打开子代理会话"><Bot size={13} /><span>{agentStatusLabel(state.status)}</span><strong>{agentDisplayName(state)}</strong><ChevronRight size={13} /></button>;
-        }
         if (["commandExecution", "fileChange", "mcpToolCall", "webSearch"].includes(item.type)) {
           return <ToolItem item={item} key={item.id} />;
         }
@@ -274,10 +202,6 @@ export function Timeline({ items, streamingItemId, turnRunning, activeTurnId, ac
         }
         return null;
       })}
-      {subagents.length > 0 && <section className={`subagent-live-panel ${runningSubagents.length === 0 ? "settled" : ""}`} aria-live="polite">
-        <header>{runningSubagents.length > 0 ? <LoaderCircle size={15} /> : <CheckCircle2 size={15} />}<span><strong>{runningSubagents.length > 0 ? turnRunning ? "主任务正在等待子代理" : "仍有子代理在后台运行" : "子代理任务已结束"}</strong><small>{runningSubagents.length > 0 ? `${runningSubagents.length} 个真实运行或等待中` : "所有子代理均已退出运行状态"} · {completedSubagents.length} 个完成{failedSubagents.length > 0 ? ` · ${failedSubagents.length} 个异常` : ""} · 点击后在右侧切换查看</small></span>{runningSubagents.length > 0 && <em>{runningSubagents.length}</em>}</header>
-        <div>{subagents.map((state) => <button type="button" key={state.id} onClick={() => onOpenSubagent?.(state)} disabled={!onOpenSubagent} title="在右侧打开子代理会话"><i className={runningAgentStatuses.has(state.status) ? "running" : state.status} /><strong>{agentDisplayName(state)}</strong><small>{agentStatusLabel(state.status)}</small><ChevronRight size={12} /></button>)}</div>
-      </section>}
       {turnRunning && !streamingItemId && <div className="reasoning-row active"><LoaderCircle size={14} /> 正在处理…</div>}
       {turnRunning && activeTurnStartedAtMs && <div className="turn-duration-live"><Clock3 size={12} />已执行 {durationText(nowMs - activeTurnStartedAtMs)}</div>}
       {previewImage && <div className="image-lightbox" role="dialog" aria-modal="true" aria-label="图片预览" onClick={() => setPreviewImage(null)}><button className="image-lightbox-close" onClick={() => setPreviewImage(null)} aria-label="关闭图片预览"><X size={22} /></button><img src={previewImage} alt="放大的聊天图片" onClick={(event) => event.stopPropagation()} /></div>}

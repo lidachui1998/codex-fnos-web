@@ -1852,7 +1852,7 @@ export default function App() {
             ) : (
               <div className="conversation-inner">
                 {threadLoading && items.length === 0 && <div className="conversation-loading" role="status"><span className="spin" />正在载入聊天记录…</div>}
-                <Timeline key={selectedThreadId ?? "empty"} items={items} streamingItemId={streamingItemId} turnRunning={conversationBusy} activeTurnId={activeTurnId} activeTurnStartedAtMs={activeTurnStartedAtMs} subagents={resolvedSubagents} retryProviders={retryProviders} retryProviderId={retryProviderId} projectPath={selectedProject.path} onOpenFile={openWorkspaceFile} onSuggestion={(text) => setComposer(text)} onResend={(item, providerId) => void resendUserMessage(item, providerId)} onRegenerate={regenerateMessage} onEditBranch={(item) => void editAndBranch(item)} onOpenSubagent={(agent) => { setWorkspacePanel(false); setSelectedSubagent(agent); }} />
+                <Timeline key={selectedThreadId ?? "empty"} items={items} streamingItemId={streamingItemId} turnRunning={conversationBusy} activeTurnStartedAtMs={activeTurnStartedAtMs} retryProviders={retryProviders} retryProviderId={retryProviderId} projectPath={selectedProject.path} onOpenFile={openWorkspaceFile} onSuggestion={(text) => setComposer(text)} onResend={(item, providerId) => void resendUserMessage(item, providerId)} onRegenerate={regenerateMessage} onEditBranch={(item) => void editAndBranch(item)} />
                 {pendingRequests.filter((request) => !request.params.threadId || request.params.threadId === selectedThreadId).map((request) => request.method === "item/tool/requestUserInput"
                   ? <UserInputCard key={request.id} request={request} onResolved={(id) => setPendingRequests((current) => current.filter((item) => item.id !== id))} />
                   : <ApprovalCard key={request.id} request={request} onResolved={(id) => setPendingRequests((current) => current.filter((item) => item.id !== id))} />)}
@@ -1886,7 +1886,7 @@ export default function App() {
         {settingsDialog && <SettingsDialog open bootstrap={bootstrap} onClose={() => setSettingsDialog(false)} onChanged={loadBootstrap} />}
         {skillsDialog && <SkillsDialog open project={selectedProject} revision={skillsRevision} onSkillsChange={updateAvailableSkills} onClose={() => setSkillsDialog(false)} />}
         {pluginsDialog && <PluginsDialog open onClose={() => { setPluginsDialog(false); pluginsLoadedRef.current = false; }} />}
-        {scheduledTasksDialog && <ScheduledTasksDialog open projects={bootstrap.projects} onClose={() => setScheduledTasksDialog(false)} onOpenThread={openScheduledThread} />}
+        {scheduledTasksDialog && <ScheduledTasksDialog open bootstrap={bootstrap} onClose={() => setScheduledTasksDialog(false)} onOpenThread={openScheduledThread} />}
         {notificationDialog && <NotificationCenterDialog open revision={notificationRevision} onClose={() => setNotificationDialog(false)} onOpenThread={openScheduledThread} onSummary={setNotificationSummary} />}
       </Suspense>
 

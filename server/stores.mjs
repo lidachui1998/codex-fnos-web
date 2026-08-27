@@ -178,11 +178,11 @@ export class Stores {
       networkAccess: values.network_access_default !== "false",
       theme: ["system", "light", "dark", "ink"].includes(values.theme) ? values.theme : "system",
       backgroundEnabled: values.background_enabled !== "false",
-      backgroundOpacity: Math.min(0.85, Math.max(0.05, Number(values.background_opacity) || 0.35)),
+      backgroundOpacity: Math.min(1, Math.max(0.2, Number(values.background_opacity) || 0.75)),
       backgroundFit: ["cover", "contain", "stretch", "tile"].includes(values.background_fit) ? values.background_fit : "cover",
       backgroundPosition: ["center", "top", "bottom"].includes(values.background_position) ? values.background_position : "center",
-      backgroundBlur: Math.min(16, Math.max(0, Number(values.background_blur) || 0)),
-      backgroundPanelOpacity: Math.min(0.95, Math.max(0.35, Number(values.background_panel_opacity) || 0.76)),
+      backgroundBlur: Math.min(8, Math.max(0, Number(values.background_blur) || 0)),
+      backgroundPanelOpacity: Math.min(0.9, Math.max(0.2, Number(values.background_panel_opacity) || 0.58)),
       fnosInstructionsEnabled: values.fnos_instructions_enabled !== "false",
       fnosInstructions: values.fnos_instructions || defaultFnosInstructions,
       personalInstructions: values.personal_instructions || "",
@@ -217,7 +217,7 @@ export class Stores {
     if ("backgroundEnabled" in input) this.#saveSetting("background_enabled", input.backgroundEnabled ? "true" : "false");
     if ("backgroundOpacity" in input) {
       const opacity = Number(input.backgroundOpacity);
-      if (!Number.isFinite(opacity) || opacity < 0.05 || opacity > 0.85) throw new Error("背景强度必须在 5% 到 85% 之间");
+      if (!Number.isFinite(opacity) || opacity < 0.2 || opacity > 1) throw new Error("图片可见度必须在 20% 到 100% 之间");
       this.#saveSetting("background_opacity", String(opacity));
     }
     if ("backgroundFit" in input) {
@@ -230,12 +230,12 @@ export class Stores {
     }
     if ("backgroundBlur" in input) {
       const blur = Number(input.backgroundBlur);
-      if (!Number.isFinite(blur) || blur < 0 || blur > 16) throw new Error("背景模糊必须在 0 到 16 之间");
+      if (!Number.isFinite(blur) || blur < 0 || blur > 8) throw new Error("背景柔化必须在 0 到 8 之间");
       this.#saveSetting("background_blur", String(blur));
     }
     if ("backgroundPanelOpacity" in input) {
       const opacity = Number(input.backgroundPanelOpacity);
-      if (!Number.isFinite(opacity) || opacity < 0.35 || opacity > 0.95) throw new Error("内容面板不透明度必须在 35% 到 95% 之间");
+      if (!Number.isFinite(opacity) || opacity < 0.2 || opacity > 0.9) throw new Error("内容面板遮罩必须在 20% 到 90% 之间");
       this.#saveSetting("background_panel_opacity", String(opacity));
     }
     if ("fnosInstructionsEnabled" in input) this.#saveSetting("fnos_instructions_enabled", input.fnosInstructionsEnabled ? "true" : "false");

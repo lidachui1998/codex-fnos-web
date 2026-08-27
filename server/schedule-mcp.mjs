@@ -22,9 +22,29 @@ function publicTask(row) {
     schedule: JSON.parse(row.schedule_json),
     enabled: Boolean(row.enabled),
     networkAccess: Boolean(row.network_access),
+    sandboxMode: row.sandbox_mode === "unrestricted" ? "unrestricted" : "workspace",
+    providerMode: ["openai", "provider"].includes(row.provider_mode) ? row.provider_mode : "follow",
+    providerId: row.provider_id,
+    providerName: row.provider_mode === "openai" ? "OpenAI / ChatGPT" : row.provider_name,
+    model: row.model,
+    reasoningEffort: row.reasoning_effort,
     nextRunAt: row.next_run_at,
     lastRunAt: row.last_run_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
+}
+
+function normalizedModel(value) {
+  return String(value || "").trim().slice(0, 120) || null;
+}
+
+function normalizedReasoningEffort(value) {
+  const effort = String(value || "").trim() || null;
+  if (effort && !["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(effort)) {
+    throw new Error("思考强度无效");
+  }
+  return effort;
 }
 
 export class ScheduleToolStore {
@@ -50,17 +70,44 @@ export class ScheduleToolStore {
     throw new Error(`存在多个项目，请传入当前项目绝对路径 projectPath。可选：${projects.map((item) => item.path).join("、")}`);
   }
 
+  #providerSelection(value, existingMode = "follow", existingId = null) {
+    if (value === undefined) return { mode: existingMode || "follow", id: existingId || null };
+    const requested = String(value || "follow").trim();
+    if (!requested || requested === "follow") return { mode: "follow", id: null };
+    if (requested === "openai") return { mode: "openai", id: null };
+    const provider = this.db.prepare("SELECT id FROM provider_profiles WHERE id = ? AND enabled = 1").get(requested);
+    if (!provider) throw new Error(`供应商不存在或已停用：${requested}`);
+    return { mode: "provider", id: provider.id };
+  }
+
+  #task(id) {
+    const row = this.db.prepare(`
+      SELECT task.*, project.name AS project_name, project.path AS project_path,
+        provider.name AS provider_name
+      FROM scheduled_tasks task
+      JOIN projects project ON project.id = task.project_id
+      LEFT JOIN provider_profiles provider ON provider.id = task.provider_id
+      WHERE task.id = ?
+    `).get(String(id || ""));
+    if (!row) throw new Error(`定时任务不存在：${id || ""}`);
+    return row;
+  }
+
   list(projectPath = "") {
     const requested = normalizeProjectPath(projectPath);
     const rows = requested
       ? this.db.prepare(`
-          SELECT task.*, project.name AS project_name, project.path AS project_path
+          SELECT task.*, project.name AS project_name, project.path AS project_path,
+            provider.name AS provider_name
           FROM scheduled_tasks task JOIN projects project ON project.id = task.project_id
+          LEFT JOIN provider_profiles provider ON provider.id = task.provider_id
           WHERE project.path = ? ORDER BY task.updated_at DESC
         `).all(requested)
       : this.db.prepare(`
-          SELECT task.*, project.name AS project_name, project.path AS project_path
+          SELECT task.*, project.name AS project_name, project.path AS project_path,
+            provider.name AS provider_name
           FROM scheduled_tasks task JOIN projects project ON project.id = task.project_id
+          LEFT JOIN provider_profiles provider ON provider.id = task.provider_id
           ORDER BY task.updated_at DESC
         `).all();
     return rows.map(publicTask);
@@ -75,13 +122,19 @@ export class ScheduleToolStore {
     if (prompt.length > 20_000) throw new Error("任务内容不能超过 20000 个字符");
     const schedule = normalizeSchedule(input.schedule);
     const enabled = input.enabled !== false;
+    const sandboxMode = String(input.sandboxMode || "workspace");
+    if (!["workspace", "unrestricted"].includes(sandboxMode)) throw new Error("定时任务沙箱模式无效");
+    const provider = this.#providerSelection(input.providerId);
+    const model = normalizedModel(input.model);
+    const reasoningEffort = normalizedReasoningEffort(input.reasoningEffort);
     const timestamp = now();
     const id = randomUUID();
     this.db.prepare(`
       INSERT INTO scheduled_tasks (
-        id, name, project_id, prompt, schedule_json, enabled, network_access,
+        id, name, project_id, prompt, schedule_json, enabled, network_access, sandbox_mode,
+        provider_mode, provider_id, model, reasoning_effort,
         next_run_at, last_run_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
     `).run(
       id,
       name,
@@ -89,11 +142,68 @@ export class ScheduleToolStore {
       prompt,
       JSON.stringify(schedule),
       enabled ? 1 : 0,
+      sandboxMode,
+      provider.mode,
+      provider.id,
+      model,
+      reasoningEffort,
       enabled ? computeNextRun(schedule) : null,
       timestamp,
       timestamp,
     );
     return this.list(project.path).find((task) => task.id === id);
+  }
+
+  update(id, input) {
+    const existing = this.#task(id);
+    const project = Object.hasOwn(input, "projectPath") ? this.#project(input.projectPath) : {
+      id: existing.project_id,
+      name: existing.project_name,
+      path: existing.project_path,
+    };
+    const name = String(input.name ?? existing.name).trim().slice(0, 120);
+    const prompt = String(input.prompt ?? existing.prompt).trim();
+    if (!name) throw new Error("任务名称不能为空");
+    if (!prompt) throw new Error("任务内容不能为空");
+    if (prompt.length > 20_000) throw new Error("任务内容不能超过 20000 个字符");
+    const schedule = Object.hasOwn(input, "schedule") ? normalizeSchedule(input.schedule) : JSON.parse(existing.schedule_json);
+    const enabled = Object.hasOwn(input, "enabled") ? Boolean(input.enabled) : Boolean(existing.enabled);
+    const sandboxMode = String(input.sandboxMode ?? existing.sandbox_mode ?? "workspace");
+    if (!["workspace", "unrestricted"].includes(sandboxMode)) throw new Error("定时任务沙箱模式无效");
+    const provider = this.#providerSelection(input.providerId, existing.provider_mode, existing.provider_id);
+    const model = Object.hasOwn(input, "model") ? normalizedModel(input.model) : existing.model;
+    const reasoningEffort = Object.hasOwn(input, "reasoningEffort")
+      ? normalizedReasoningEffort(input.reasoningEffort)
+      : existing.reasoning_effort;
+    const timestamp = now();
+    this.db.prepare(`
+      UPDATE scheduled_tasks SET
+        name = ?, project_id = ?, prompt = ?, schedule_json = ?, enabled = ?, network_access = 1,
+        sandbox_mode = ?, provider_mode = ?, provider_id = ?, model = ?, reasoning_effort = ?,
+        next_run_at = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      name,
+      project.id,
+      prompt,
+      JSON.stringify(schedule),
+      enabled ? 1 : 0,
+      sandboxMode,
+      provider.mode,
+      provider.id,
+      model,
+      reasoningEffort,
+      enabled ? computeNextRun(schedule) : null,
+      timestamp,
+      existing.id,
+    );
+    return publicTask(this.#task(existing.id));
+  }
+
+  delete(id) {
+    const existing = this.#task(id);
+    this.db.prepare("DELETE FROM scheduled_tasks WHERE id = ?").run(existing.id);
+    return { deleted: true, id: existing.id, name: existing.name };
   }
 }
 
@@ -119,6 +229,25 @@ export class ConversationClient {
   }
 }
 
+const scheduleInputSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    type: { type: "string", enum: ["interval", "daily", "weekly"] },
+    minutes: { type: "integer", minimum: 5, maximum: 10080, description: "interval 使用" },
+    time: { type: "string", pattern: "^([01]\\d|2[0-3]):[0-5]\\d$", description: "daily/weekly 使用，NAS 本地时间 HH:mm" },
+    days: { type: "array", items: { type: "integer", minimum: 0, maximum: 6 }, description: "weekly 使用，0=周日，1=周一，...，6=周六" },
+  },
+  required: ["type"],
+};
+
+const taskOptionProperties = {
+  providerId: { type: "string", description: "模型供应商：follow 表示跟随项目默认，openai 表示官方 OpenAI/ChatGPT，也可传已启用的第三方供应商 ID" },
+  model: { type: "string", maxLength: 120, description: "可选模型 ID；空字符串表示使用所选供应商的默认模型" },
+  reasoningEffort: { type: "string", enum: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", ""], description: "可选思考强度；空字符串表示使用模型默认" },
+  sandboxMode: { type: "string", enum: ["workspace", "unrestricted"], description: "默认 workspace；只有用户明确允许关闭 Codex 内置沙箱时才能用 unrestricted" },
+};
+
 const tools = [
   {
     name: "create_scheduled_task",
@@ -131,18 +260,9 @@ const tools = [
         name: { type: "string", description: "简短任务名称" },
         prompt: { type: "string", description: "定时触发后交给 Codex 执行的完整指令" },
         projectPath: { type: "string", description: "当前项目的绝对路径；工作台只有一个项目时可省略" },
-        schedule: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            type: { type: "string", enum: ["interval", "daily", "weekly"] },
-            minutes: { type: "integer", minimum: 5, maximum: 10080, description: "interval 使用" },
-            time: { type: "string", pattern: "^([01]\\d|2[0-3]):[0-5]\\d$", description: "daily/weekly 使用，NAS 本地时间 HH:mm" },
-            days: { type: "array", items: { type: "integer", minimum: 0, maximum: 6 }, description: "weekly 使用，0=周日，1=周一，...，6=周六" },
-          },
-          required: ["type"],
-        },
+        schedule: scheduleInputSchema,
         enabled: { type: "boolean", description: "是否立即启用，默认 true" },
+        ...taskOptionProperties,
       },
       required: ["name", "prompt", "schedule"],
     },
@@ -159,6 +279,37 @@ const tools = [
       },
     },
     annotations: { readOnlyHint: true },
+  },
+  {
+    name: "update_scheduled_task",
+    title: "编辑飞牛定时任务",
+    description: "编辑已有定时任务，也可暂停或恢复。用户要求修改提示词、频率、项目、供应商、模型、思考强度、沙箱或启用状态时使用。先用 list_scheduled_tasks 确认准确任务 ID；成功后必须复述改动后的任务。",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        taskId: { type: "string", minLength: 1, description: "要编辑的定时任务 ID" },
+        name: { type: "string", maxLength: 120 },
+        prompt: { type: "string", maxLength: 20000 },
+        projectPath: { type: "string", description: "可选，移动到这个已登记的项目绝对路径" },
+        schedule: scheduleInputSchema,
+        enabled: { type: "boolean", description: "false 暂停，true 恢复" },
+        ...taskOptionProperties,
+      },
+      required: ["taskId"],
+    },
+  },
+  {
+    name: "delete_scheduled_task",
+    title: "删除飞牛定时任务",
+    description: "仅当用户明确要求删除某个定时任务时使用。先用 list_scheduled_tasks 核对准确任务 ID；删除任务不会删除已有结果会话。",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: { taskId: { type: "string", minLength: 1, description: "要删除的定时任务 ID" } },
+      required: ["taskId"],
+    },
+    annotations: { destructiveHint: true },
   },
   {
     name: "create_new_conversation",
@@ -231,6 +382,8 @@ export function handleScheduleMcpRequest(store, message, extensions, conversatio
     const args = message.params?.arguments || {};
     if (message.params?.name === "create_scheduled_task") return toolResult(store.create(args));
     if (message.params?.name === "list_scheduled_tasks") return toolResult({ data: store.list(args.projectPath) });
+    if (message.params?.name === "update_scheduled_task") return toolResult(store.update(args.taskId, args));
+    if (message.params?.name === "delete_scheduled_task") return toolResult(store.delete(args.taskId));
     if (message.params?.name === "create_new_conversation") {
       if (!conversations) throw new Error("新会话创建入口未配置");
       return conversations.create(args).then(toolResult);

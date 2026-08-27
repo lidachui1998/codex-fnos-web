@@ -213,55 +213,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .status-dot { display: inline-flex; align-items: center; color: var(--muted); font-style: normal; }
 .status-dot.completed { color: var(--green); }
 .status-dot.inProgress svg { animation: spin 1.2s linear infinite; }
-.subagent-card { margin-left: 41px; overflow: hidden; border: 1px solid color-mix(in srgb,var(--accent) 34%,var(--line)); border-radius: 12px; background: color-mix(in srgb,var(--accent-soft) 42%,var(--paper)); }
-.subagent-card.failed { border-color: color-mix(in srgb,var(--red) 38%,var(--line)); background: color-mix(in srgb,var(--red) 6%,var(--paper)); }
-.subagent-summary { width: 100%; min-height: 50px; display: grid; grid-template-columns: 30px minmax(0,1fr) auto auto; align-items: center; gap: 9px; padding: 8px 10px; border: 0; background: transparent; color: var(--ink); cursor: pointer; text-align: left; }
-.subagent-summary > span:nth-child(2) { min-width: 0; }
-.subagent-summary strong, .subagent-summary small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.subagent-summary strong { font-size: 10.5px; }
-.subagent-summary small { margin-top: 3px; color: var(--muted); font-size: 8px; }
-.subagent-summary > em { padding: 4px 7px; border-radius: 99px; background: var(--paper); color: var(--accent-dark); font-size: 7.5px; font-style: normal; font-weight: 800; white-space: nowrap; }
-.subagent-card.failed .subagent-summary > em { color: var(--red); }
-.subagent-icon { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; background: var(--paper); color: var(--accent-dark); }
-.subagent-card.running .subagent-icon svg, .subagent-live-panel header > svg { animation: spin 1.2s linear infinite; }
-.subagent-detail { display: grid; gap: 7px; padding: 0 10px 10px 49px; }
-.subagent-detail > p { max-height: 4.2em; margin: 0; overflow: hidden; color: var(--muted); font-size: 8.5px; line-height: 1.4; white-space: pre-wrap; }
-.subagent-detail > button { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 7px; min-width: 0; padding: 6px 8px; border: 0; border-radius: 8px; background: color-mix(in srgb,var(--paper) 76%,transparent); text-align: left; cursor: pointer; }
-.subagent-detail > button:hover:not(:disabled) { background: var(--surface-hover); }
-.subagent-detail > button:disabled { cursor: default; }
-.subagent-detail > button strong, .subagent-detail > button small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.subagent-detail > button strong { font-size: 8.5px; }
-.subagent-detail > button small { grid-column: 2; color: var(--muted); font-size: 7.5px; }
-.subagent-detail > button > svg { color: var(--faint); }
-.subagent-state { padding: 3px 5px; border-radius: 99px; background: var(--panel); color: var(--muted); font-size: 7px; }
-.subagent-state.running, .subagent-state.pendingInit, .subagent-state.inProgress, .subagent-state.waitingApproval, .subagent-state.waitingInput { background: var(--accent-soft); color: var(--accent-dark); }
-.subagent-state.completed { background: color-mix(in srgb,var(--green) 12%,var(--paper)); color: var(--green); }
-.subagent-state.errored, .subagent-state.failed { background: color-mix(in srgb,var(--red) 10%,var(--paper)); color: var(--red); }
-.subagent-detail footer { color: var(--faint); font-size: 7.5px; }
-.subagent-activity { display: flex; align-items: center; gap: 7px; margin-left: 41px; padding: 6px 9px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 8.5px; text-align: left; cursor: pointer; }
-.subagent-activity:hover:not(:disabled) { background: var(--panel); }
-.subagent-activity:disabled { cursor: default; }
-.subagent-activity > svg { color: var(--accent-dark); }
-.subagent-activity strong { min-width: 0; overflow: hidden; color: var(--ink); text-overflow: ellipsis; white-space: nowrap; }
-.subagent-live-panel { display: grid; gap: 8px; margin-left: 41px; padding: 10px; border: 1px solid color-mix(in srgb,var(--accent) 46%,var(--line)); border-radius: 13px; background: linear-gradient(135deg,color-mix(in srgb,var(--accent-soft) 72%,var(--paper)),var(--paper)); box-shadow: 0 8px 24px color-mix(in srgb,var(--accent) 9%,transparent); }
-.subagent-live-panel header { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 9px; color: var(--accent-dark); }
-.subagent-live-panel header > span { min-width: 0; }
-.subagent-live-panel header strong, .subagent-live-panel header small { display: block; }
-.subagent-live-panel header strong { color: var(--ink); font-size: 10px; }
-.subagent-live-panel header small { margin-top: 2px; overflow: hidden; color: var(--muted); font-size: 7.8px; text-overflow: ellipsis; white-space: nowrap; }
-.subagent-live-panel header em { min-width: 22px; height: 22px; display: grid; place-items: center; border-radius: 99px; background: var(--accent); color: #fff; font-size: 8px; font-style: normal; font-weight: 800; }
-.subagent-live-panel > div { display: flex; flex-wrap: wrap; gap: 6px; }
-.subagent-live-panel.settled { border-color: var(--line); background: var(--panel); box-shadow: none; }
-.subagent-live-panel > div > button { min-width: 0; display: inline-grid; grid-template-columns: auto minmax(0,1fr) auto auto; align-items: center; gap: 5px; max-width: 100%; padding: 5px 7px; border: 0; border-radius: 8px; background: color-mix(in srgb,var(--paper) 80%,transparent); text-align: left; cursor: pointer; }
-.subagent-live-panel > div > button:hover:not(:disabled) { background: var(--surface-hover); }
-.subagent-live-panel > div > button:disabled { cursor: default; }
-.subagent-live-panel i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb,var(--accent) 12%,transparent); }
-.subagent-live-panel i.waitingApproval, .subagent-live-panel i.waitingInput { background: #c17a19; box-shadow: 0 0 0 3px color-mix(in srgb,#c17a19 14%,transparent); }
-.subagent-live-panel i.completed, .subagent-live-panel i.shutdown { background: var(--green); box-shadow: none; }
-.subagent-live-panel i.errored, .subagent-live-panel i.failed, .subagent-live-panel i.interrupted, .subagent-live-panel i.notFound { background: var(--red); box-shadow: none; }
-.subagent-live-panel > div strong { min-width: 0; overflow: hidden; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
-.subagent-live-panel > div small { color: var(--accent-dark); font-size: 7px; white-space: nowrap; }
-.subagent-live-panel > div button > svg { color: var(--faint); }
 .tool-detail { max-height: 310px; margin: 0; padding: 13px; overflow: auto; border-top: 1px solid var(--line); background: #1f1f1f; color: #ececec; font-family: "SFMono-Regular", Consolas, monospace; font-size: 10px; line-height: 1.55; white-space: pre-wrap; }
 .tool-detail.file-change-detail { max-height: 460px; padding: 0; white-space: normal; }
 .file-change-detail section + section { border-top: 1px solid #414141; }
@@ -512,10 +463,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .message { grid-template-columns: 25px minmax(0, 1fr); gap: 9px; }
   .message-avatar { width: 25px; height: 25px; border-radius: 8px; }
   .message-text { font-size: 13px; line-height: 1.68; }
-  .reasoning-row, .tool-item, .subagent-card, .subagent-activity, .subagent-live-panel { margin-left: 34px; padding-left: 0; }
-  .subagent-detail { padding-right: 8px; padding-bottom: 8px; padding-left: 8px; }
-  .subagent-live-panel { padding: 9px; }
-  .subagent-live-panel header small { white-space: normal; }
+  .reasoning-row, .tool-item { margin-left: 34px; padding-left: 0; }
   .suggestion-grid { width: 100%; }
   .conversation-empty { min-height: 390px; }
   .conversation-empty h2 { font-size: 21px; }
@@ -795,7 +743,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .subagent-panel-meta > small { font-size: 10px; white-space: nowrap; }
 .subagent-panel-body { min-height: 0; overflow-y: auto; padding: 13px 11px; }
 .subagent-panel-body .timeline { gap: 13px; }
-.subagent-panel-body .message, .subagent-panel-body .tool-item, .subagent-panel-body .subagent-card, .subagent-panel-body .subagent-activity, .subagent-panel-body .subagent-live-panel { margin-left: 0; }
+.subagent-panel-body .message, .subagent-panel-body .tool-item { margin-left: 0; }
 .subagent-panel-body .tool-item { max-width: 100%; }
 .subagent-panel-body .reasoning-row { padding-left: 0; }
 .subagent-panel-body .message-text { font-size: 12.5px; }
@@ -1280,8 +1228,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .app-shell.has-background { background-color: var(--bg); background-image: none; }
 .app-shell.has-background::before { content: ""; position: absolute; z-index: 0; inset: var(--background-inset,0px); background-image: var(--workspace-background); background-position: var(--background-position,center); background-size: var(--background-size,cover); background-repeat: var(--background-repeat,no-repeat); filter: blur(var(--background-blur,0px)); opacity: var(--background-opacity); pointer-events: none; }
 .app-shell.has-background .workspace { position: relative; z-index: 1; }
-.app-shell.has-background .projects-panel, .app-shell.has-background .threads-panel { background: color-mix(in srgb,var(--panel) var(--background-panel-opacity,76%),transparent); backdrop-filter: blur(14px); }
-.app-shell.has-background .workspace { background: color-mix(in srgb,var(--paper) var(--background-panel-opacity,76%),transparent); backdrop-filter: blur(7px); }
+.app-shell.has-background .projects-panel, .app-shell.has-background .threads-panel { background: color-mix(in srgb,var(--panel) var(--background-panel-opacity,58%),transparent); backdrop-filter: blur(3px); }
+.app-shell.has-background .workspace { background: color-mix(in srgb,var(--paper) var(--background-panel-opacity,58%),transparent); backdrop-filter: blur(1px); }
 
 @media (max-width: 560px) {
   .conversation-tools.mobile-open > * { display: flex; }

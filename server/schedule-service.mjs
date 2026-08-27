@@ -33,7 +33,7 @@ function itemSummary(item) {
   return value === undefined || value === null ? null : String(value).trim().slice(0, 500) || null;
 }
 
-function publicTask(row, projectName, runs = []) {
+function publicTask(row, projectName, providerName, runs = []) {
   return {
     id: row.id,
     name: row.name,
@@ -44,6 +44,9 @@ function publicTask(row, projectName, runs = []) {
     enabled: Boolean(row.enabled),
     networkAccess: Boolean(row.network_access),
     sandboxMode: row.sandbox_mode === "unrestricted" ? "unrestricted" : "workspace",
+    providerMode: ["openai", "provider"].includes(row.provider_mode) ? row.provider_mode : "follow",
+    providerId: row.provider_id,
+    providerName,
     model: row.model,
     reasoningEffort: row.reasoning_effort,
     sourceAutomationId: row.source_automation_id,
@@ -112,9 +115,15 @@ export class ScheduleService {
 
   list() {
     const projects = new Map(this.stores.listProjects().map((project) => [project.id, project.name]));
+    const providers = new Map(this.stores.listProviders().map((provider) => [provider.id, provider.name]));
     return this.stores.db.prepare("SELECT * FROM scheduled_tasks ORDER BY updated_at DESC").all().map((row) => {
       const runs = this.stores.db.prepare("SELECT * FROM scheduled_runs WHERE task_id = ? ORDER BY started_at DESC LIMIT 8").all(row.id);
-      return publicTask(row, projects.get(row.project_id) || "项目已移除", runs);
+      const providerName = row.provider_mode === "openai"
+        ? "OpenAI / ChatGPT"
+        : row.provider_mode === "provider"
+          ? providers.get(row.provider_id) || "供应商已移除"
+          : null;
+      return publicTask(row, projects.get(row.project_id) || "项目已移除", providerName, runs);
     });
   }
 
@@ -154,6 +163,16 @@ export class ScheduleService {
     if (!["workspace", "unrestricted"].includes(sandboxMode)) {
       throw Object.assign(new Error("定时任务沙箱模式无效"), { status: 400 });
     }
+    const providerMode = String(input.providerMode ?? existing?.provider_mode ?? "follow");
+    if (!["follow", "openai", "provider"].includes(providerMode)) {
+      throw Object.assign(new Error("定时任务供应商模式无效"), { status: 400 });
+    }
+    const providerId = providerMode === "provider"
+      ? String(input.providerId ?? existing?.provider_id ?? "").trim()
+      : null;
+    if (providerMode === "provider" && !this.stores.listProviders().some((provider) => provider.id === providerId && provider.enabled)) {
+      throw Object.assign(new Error("定时任务指定的供应商不存在或已停用"), { status: 400 });
+    }
     const model = Object.hasOwn(input, "model") ? String(input.model || "").trim().slice(0, 120) || null : existing?.model ?? null;
     const reasoningEffort = Object.hasOwn(input, "reasoningEffort") ? String(input.reasoningEffort || "").trim() || null : existing?.reasoning_effort ?? null;
     if (reasoningEffort && !["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(reasoningEffort)) {
@@ -180,13 +199,15 @@ export class ScheduleService {
     this.stores.db.prepare(`
       INSERT INTO scheduled_tasks (
         id, name, project_id, prompt, schedule_json, enabled, network_access, sandbox_mode,
-        model, reasoning_effort, source_automation_id, source_cwd, source_prompt, memory_text, compatibility_json,
+        provider_mode, provider_id, model, reasoning_effort,
+        source_automation_id, source_cwd, source_prompt, memory_text, compatibility_json,
         next_run_at, last_run_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name, project_id = excluded.project_id, prompt = excluded.prompt,
         schedule_json = excluded.schedule_json, enabled = excluded.enabled, network_access = 1,
         sandbox_mode = excluded.sandbox_mode,
+        provider_mode = excluded.provider_mode, provider_id = excluded.provider_id,
         model = excluded.model, reasoning_effort = excluded.reasoning_effort,
         source_automation_id = excluded.source_automation_id, source_cwd = excluded.source_cwd,
         source_prompt = excluded.source_prompt, memory_text = excluded.memory_text,
@@ -200,6 +221,8 @@ export class ScheduleService {
       JSON.stringify(schedule),
       enabled ? 1 : 0,
       sandboxMode,
+      providerMode,
+      providerId,
       model,
       reasoningEffort,
       sourceAutomationId,
@@ -261,8 +284,17 @@ export class ScheduleService {
     if (this.bridge.snapshot().status !== "ready") throw Object.assign(new Error("Codex 服务尚未就绪"), { status: 503 });
     const project = this.stores.listProjects().find((item) => item.id === task.project_id);
     if (!project) throw Object.assign(new Error("定时任务所属项目已移除"), { status: 404 });
-    const providerId = project.defaultProviderId || null;
+    const providerMode = ["openai", "provider"].includes(task.provider_mode) ? task.provider_mode : "follow";
+    const providerId = providerMode === "openai"
+      ? null
+      : providerMode === "provider"
+        ? task.provider_id
+        : project.defaultProviderId || null;
     const provider = providerId ? this.stores.listProviders().find((item) => item.id === providerId) : null;
+    if (providerId && (!provider || !provider.enabled)) {
+      throw Object.assign(new Error("定时任务使用的供应商不存在或已停用，请先编辑任务"), { status: 409 });
+    }
+    const scheduledModel = task.model || provider?.model || undefined;
     const unattendedAccess = Boolean(task.network_access);
     const unrestrictedAccess = unattendedAccess && task.sandbox_mode === "unrestricted";
     const unattendedInstructions = !unattendedAccess
@@ -281,7 +313,7 @@ export class ScheduleService {
       const started = await this.bridge.request("thread/start", {
         cwd: project.path,
         modelProvider: modelProviderKey(providerId),
-        model: provider?.model || task.model || undefined,
+        model: scheduledModel,
         config: codexRuntimeConfig(task.reasoning_effort || undefined),
         approvalPolicy: "never",
         sandbox: unrestrictedAccess ? "danger-full-access" : unattendedAccess ? "workspace-write" : "read-only",
@@ -318,7 +350,7 @@ ${memoryContext}` : ""}`,
           : unattendedAccess
             ? { type: "workspaceWrite", writableRoots: [project.path], networkAccess: true }
           : { type: "readOnly" },
-        model: provider?.model || task.model || undefined,
+        model: scheduledModel,
         effort: task.reasoning_effort || undefined,
       });
       this.#recordMilestone(runId, "turn_started", "turn/started", `主任务 ${turn.turn.id}`, { turnId: turn.turn.id });

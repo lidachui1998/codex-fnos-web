@@ -206,6 +206,9 @@ export type ScheduledTask = {
   enabled: boolean;
   networkAccess: boolean;
   sandboxMode: "workspace" | "unrestricted";
+  providerMode: "follow" | "openai" | "provider";
+  providerId?: string | null;
+  providerName?: string | null;
   model?: string | null;
   reasoningEffort?: ReasoningEffort | null;
   sourceAutomationId?: string | null;

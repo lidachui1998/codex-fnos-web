@@ -1,9 +1,11 @@
 import { CalendarClock, CheckCircle2, ChevronDown, Clock3, FileUp, LoaderCircle, MessageSquareText, Play, Plus, RefreshCw, Trash2, Wrench, XCircle } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import type { AutomationCompatibilityIssue, Project, Schedule, ScheduledTask } from "../types";
+import { inferReasoningProfile, reasoningOptions, reasoningProfileName } from "../reasoning-profile";
+import type { AutomationCompatibilityIssue, Bootstrap, Project, ReasoningEffort, Schedule, ScheduledTask } from "../types";
 import { Modal } from "./Modal";
 import { AutomationImportPanel } from "./AutomationImportPanel";
+import { ModelCombobox } from "./ModelCombobox";
 
 const weekdays = ["日", "一", "二", "三", "四", "五", "六"];
 
@@ -18,12 +20,16 @@ type ScheduleForm = {
   days: number[];
   enabled: boolean;
   sandboxMode: "workspace" | "unrestricted";
+  providerMode: "follow" | "openai" | "provider";
+  providerId: string;
+  model: string;
+  reasoningEffort: ReasoningEffort | "";
   compatibility: AutomationCompatibilityIssue[];
   resolveCompatibility: boolean;
 };
 
 function emptyForm(projects: Project[]): ScheduleForm {
-  return { name: "", projectId: projects[0]?.id || "", prompt: "", type: "daily", minutes: 60, time: "09:00", days: [1, 2, 3, 4, 5], enabled: true, sandboxMode: "workspace", compatibility: [], resolveCompatibility: false };
+  return { name: "", projectId: projects[0]?.id || "", prompt: "", type: "daily", minutes: 60, time: "09:00", days: [1, 2, 3, 4, 5], enabled: true, sandboxMode: "workspace", providerMode: "follow", providerId: "", model: "", reasoningEffort: "", compatibility: [], resolveCompatibility: false };
 }
 
 function formFromTask(task: ScheduledTask): ScheduleForm {
@@ -38,6 +44,10 @@ function formFromTask(task: ScheduledTask): ScheduleForm {
     days: task.schedule.type === "weekly" ? task.schedule.days : [1, 2, 3, 4, 5],
     enabled: task.enabled,
     sandboxMode: task.sandboxMode,
+    providerMode: task.providerMode,
+    providerId: task.providerId || "",
+    model: task.model || "",
+    reasoningEffort: task.reasoningEffort || "",
     compatibility: task.compatibility,
     resolveCompatibility: false,
   };
@@ -94,12 +104,20 @@ function phaseText(phase: string) {
   return labels[phase] || phase.replaceAll("_", " ");
 }
 
-export function ScheduledTasksDialog({ open, projects, onClose, onOpenThread }: {
+type ModelOption = {
+  id: string;
+  model: string;
+  displayName: string;
+  supportedReasoningEfforts?: Array<{ reasoningEffort: ReasoningEffort; description?: string }>;
+};
+
+export function ScheduledTasksDialog({ open, bootstrap, onClose, onOpenThread }: {
   open: boolean;
-  projects: Project[];
+  bootstrap: Bootstrap;
   onClose: () => void;
   onOpenThread: (threadId: string, projectId: string) => void;
 }) {
+  const projects = bootstrap.projects;
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
   const [form, setForm] = useState<ScheduleForm>(() => emptyForm(projects));
   const [editing, setEditing] = useState(false);
@@ -110,6 +128,21 @@ export function ScheduledTasksDialog({ open, projects, onClose, onOpenThread }: 
   const [notice, setNotice] = useState("");
   const [now, setNow] = useState(Date.now());
   const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
+  const [models, setModels] = useState<ModelOption[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsWarning, setModelsWarning] = useState("");
+  const selectedProject = projects.find((project) => project.id === form.projectId);
+  const effectiveProviderId = form.providerMode === "provider"
+    ? form.providerId
+    : form.providerMode === "follow"
+      ? selectedProject?.defaultProviderId || ""
+      : "";
+  const effectiveProvider = bootstrap.providers.find((provider) => provider.id === effectiveProviderId) ?? null;
+  const selectedModelOption = models.find((model) => model.model === form.model);
+  const effortOptions = useMemo(
+    () => reasoningOptions(effectiveProvider, form.model, selectedModelOption?.supportedReasoningEfforts),
+    [effectiveProvider, form.model, selectedModelOption],
+  );
 
   async function load() {
     setLoading(true); setError("");
@@ -130,6 +163,24 @@ export function ScheduledTasksDialog({ open, projects, onClose, onOpenThread }: 
     return () => { window.clearInterval(timer); window.clearInterval(clock); };
   }, [open, projects]);
 
+  useEffect(() => {
+    if (!open || !editing || (effectiveProviderId === "" && bootstrap.bridge.status !== "ready")) return;
+    const controller = new AbortController();
+    setModelsLoading(true);
+    setModels([]);
+    setModelsWarning("");
+    api<{ data: ModelOption[]; warning?: string }>(`/api/models${effectiveProviderId ? `?providerId=${encodeURIComponent(effectiveProviderId)}` : ""}`, { signal: controller.signal })
+      .then((result) => {
+        setModels(result.data ?? []);
+        if (result.warning) setModelsWarning(`模型列表读取失败，可手动填写：${result.warning}`);
+      })
+      .catch((reason) => {
+        if (!controller.signal.aborted) setModelsWarning(reason instanceof Error ? reason.message : "模型列表读取失败，可手动填写模型 ID");
+      })
+      .finally(() => { if (!controller.signal.aborted) setModelsLoading(false); });
+    return () => controller.abort();
+  }, [open, editing, effectiveProviderId, bootstrap.bridge.status]);
+
   function resetForm() {
     setForm(emptyForm(projects)); setEditing(false); setImporting(false); setError("");
   }
@@ -147,6 +198,10 @@ export function ScheduledTasksDialog({ open, projects, onClose, onOpenThread }: 
           schedule: scheduleFromForm(form),
           enabled: form.enabled,
           sandboxMode: form.sandboxMode,
+          providerMode: form.providerMode,
+          providerId: form.providerMode === "provider" ? form.providerId : null,
+          model: form.model,
+          reasoningEffort: form.reasoningEffort,
           resolveCompatibility: form.resolveCompatibility,
         }),
       });
@@ -201,7 +256,7 @@ export function ScheduledTasksDialog({ open, projects, onClose, onOpenThread }: 
           const expandedRun = task.runs.find((run) => run.id === expandedRunId);
           return <article className={`schedule-card ${task.enabled ? "" : "disabled"}`} key={task.id}>
             <span className="schedule-card-icon"><Clock3 size={18} /></span>
-            <span className="schedule-card-copy"><strong>{task.name}</strong><small>{task.projectName} · {scheduleText(task.schedule)} · {task.networkAccess ? task.sandboxMode === "unrestricted" ? "已关闭 Codex 沙箱" : "项目可写沙箱" : "旧任务只读"}</small><em>{task.sourceAutomationId ? `电脑导入 · ${task.model || "跟随项目"} · ${task.reasoningEffort || "默认思考"} · 记忆 ${Math.ceil(task.memoryBytes / 1024)}KB · ` : ""}下次 {timeText(task.nextRunAt)} · 上次 {timeText(task.lastRunAt)}</em></span>
+            <span className="schedule-card-copy"><strong>{task.name}</strong><small>{task.projectName} · {scheduleText(task.schedule)} · {task.networkAccess ? task.sandboxMode === "unrestricted" ? "已关闭 Codex 沙箱" : "项目可写沙箱" : "旧任务只读"}</small><em>{task.sourceAutomationId ? `电脑导入 · 记忆 ${Math.ceil(task.memoryBytes / 1024)}KB · ` : ""}{task.providerMode === "follow" ? "跟随项目供应商" : task.providerName || "供应商已移除"} · {task.model || "供应商默认模型"} · {task.reasoningEffort || "默认思考"} · 下次 {timeText(task.nextRunAt)} · 上次 {timeText(task.lastRunAt)}</em></span>
             <span className="schedule-card-actions"><label title={task.enabled ? "已启用" : blockingIssues(task).length > 0 ? "完成 fnOS 适配后才能启用" : "已暂停"}><input type="checkbox" checked={task.enabled} disabled={busyId === task.id || (!task.enabled && blockingIssues(task).length > 0)} onChange={() => void toggle(task)} />{task.enabled ? "启用" : "暂停"}</label><button className="secondary-button compact" disabled={Boolean(busyId)} onClick={() => void run(task)}><Play size={13} /> {blockingIssues(task).length > 0 ? "兼容试运行" : "立即运行"}</button><button className="secondary-button compact" onClick={() => { setForm(formFromTask(task)); setEditing(true); }}><Wrench size={13} /> {blockingIssues(task).length > 0 ? "编辑适配" : "编辑"}</button><button className="icon-button small danger" title="删除" disabled={busyId === task.id} onClick={() => void remove(task)}><Trash2 size={14} /></button></span>
             {blockingIssues(task).length > 0 && <div className="schedule-compatibility"><strong>需要先完成 fnOS 适配：</strong>{blockingIssues(task).map((issue) => issue.message).join("；")}<small>先点“兼容试运行”查看 NAS 上缺少的脚本或登录态，再点“编辑适配”修改任务内容；确认可以在 fnOS 执行后勾选适配确认并启用。</small></div>}
             {task.runs.length > 0 && <div className="schedule-runs">{task.runs.slice(0, 3).map((run) => <button className={run.id === expandedRunId ? "active" : ""} key={run.id} onClick={() => setExpandedRunId((current) => current === run.id ? null : run.id)} title="展开本批次运行诊断">{run.status === "running" ? <LoaderCircle size={12} className="spin" /> : run.status === "succeeded" ? <CheckCircle2 size={12} /> : <XCircle size={12} />}<span>{timeText(run.startedAt)}</span><em>{run.status === "running" ? "运行中" : run.status === "succeeded" ? "已完成" : "失败"} · {phaseText(run.phase)} · {durationText(run.startedAt, run.completedAt, now)}</em><ChevronDown size={11} /></button>)}</div>}
@@ -218,6 +273,21 @@ export function ScheduledTasksDialog({ open, projects, onClose, onOpenThread }: 
     </> : <form className="schedule-form" onSubmit={(event) => void save(event)}>
       <div className="form-grid two"><label><span>任务名称</span><input required maxLength={120} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="每日项目巡检" /></label><label><span>所属项目</span><select required value={form.projectId} onChange={(event) => setForm({ ...form, projectId: event.target.value })}>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label></div>
       <label><span>给 Codex 的任务内容</span><textarea required maxLength={20_000} rows={7} value={form.prompt} onChange={(event) => setForm({ ...form, prompt: event.target.value })} placeholder="联网检查当前项目状态和最近变更，把报告写入 reports/status.md。" /></label>
+      <div className="form-grid two">
+        <label><span>模型供应商</span><select value={form.providerMode === "provider" ? `provider:${form.providerId}` : form.providerMode} onChange={(event) => {
+          const value = event.target.value;
+          if (value.startsWith("provider:")) {
+            const providerId = value.slice("provider:".length);
+            const provider = bootstrap.providers.find((item) => item.id === providerId);
+            setForm({ ...form, providerMode: "provider", providerId, model: provider?.model || "", reasoningEffort: "" });
+          } else {
+            setForm({ ...form, providerMode: value as "follow" | "openai", providerId: "", model: "", reasoningEffort: "" });
+          }
+        }}><option value="follow">跟随所属项目默认</option><option value="openai">OpenAI / ChatGPT</option>{bootstrap.providers.filter((provider) => provider.enabled).map((provider) => <option key={provider.id} value={`provider:${provider.id}`}>{provider.name}</option>)}</select></label>
+        <label><span>模型 ID {modelsLoading && <LoaderCircle size={12} className="spin" />}</span><ModelCombobox options={models.map((model) => ({ value: model.model, label: model.displayName }))} value={form.model} onChange={(model) => setForm({ ...form, model })} placeholder="留空则使用供应商默认模型" ariaLabel="定时任务模型 ID" /></label>
+      </div>
+      <label><span>思考强度 · {reasoningProfileName(inferReasoningProfile(effectiveProvider, form.model))}</span><select value={form.reasoningEffort} onChange={(event) => setForm({ ...form, reasoningEffort: event.target.value as ReasoningEffort | "" })}><option value="">跟随模型默认</option>{effortOptions.map((option) => <option key={option.value} value={option.value}>{option.label}（{option.value}）</option>)}</select><small>{form.reasoningEffort ? effortOptions.find((option) => option.value === form.reasoningEffort)?.description : "只覆盖这条定时任务，不影响项目和普通会话。"}</small></label>
+      {modelsWarning && <div className="settings-warning">{modelsWarning}</div>}
       {form.compatibility.some((issue) => issue.severity === "blocker") && <div className="schedule-compatibility editor"><strong>导入任务仍含 Windows 专属依赖</strong><span>{form.compatibility.filter((issue) => issue.severity === "blocker").map((issue) => issue.message).join("；")}</span><label className="toggle-row"><span>我已把这些依赖改成 fnOS 可用的脚本/API，并允许解除暂停</span><input type="checkbox" checked={form.resolveCompatibility} onChange={(event) => setForm({ ...form, resolveCompatibility: event.target.checked, enabled: event.target.checked ? form.enabled : false })} /></label></div>}
       <div className="form-grid two"><label><span>执行频率</span><select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value as Schedule["type"] })}><option value="daily">每天</option><option value="weekly">每周</option><option value="interval">固定间隔</option></select></label>{form.type === "interval" ? <label><span>间隔分钟（5–10080）</span><input type="number" min={5} max={10_080} required value={form.minutes} onChange={(event) => setForm({ ...form, minutes: Number(event.target.value) })} /></label> : <label><span>执行时间（NAS 系统时区）</span><input type="time" required value={form.time} onChange={(event) => setForm({ ...form, time: event.target.value })} /></label>}</div>
       {form.type === "weekly" && <div className="weekday-picker"><span>执行日期</span><div>{weekdays.map((day, index) => <button type="button" className={form.days.includes(index) ? "active" : ""} key={day} onClick={() => setForm({ ...form, days: form.days.includes(index) ? form.days.filter((value) => value !== index) : [...form.days, index].sort() })}>周{day}</button>)}</div></div>}
