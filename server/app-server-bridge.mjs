@@ -151,7 +151,7 @@ export class AppServerBridge extends EventEmitter {
         this.#consumeOutput(child);
         try {
           await this.request("initialize", {
-            clientInfo: { name: "codex-fnos-web", title: "Codex fnOS Web", version: "0.9.12" },
+            clientInfo: { name: "codex-fnos-web", title: "Codex fnOS Web", version: "0.9.13" },
             capabilities: { experimentalApi: true },
           }, { requireReady: false });
           this.notify("initialized", {});

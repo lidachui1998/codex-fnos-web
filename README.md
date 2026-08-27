@@ -5,10 +5,10 @@
   <p>原生飞牛桌面体验 · 实时对话控制 · 后台定时任务 · Skills 与插件 · 多模型供应商</p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-0.9.12-0f9f7f?style=flat-square" alt="Version 0.9.12">
+    <img src="https://img.shields.io/badge/version-0.9.13-0f9f7f?style=flat-square" alt="Version 0.9.13">
     <img src="https://img.shields.io/badge/fnOS-x86__64-1f2937?style=flat-square" alt="fnOS x86_64">
     <img src="https://img.shields.io/badge/Node.js-24%2B-3c873a?style=flat-square" alt="Node.js 24+">
-    <img src="https://img.shields.io/badge/tests-97%20passed-0f9f7f?style=flat-square" alt="97 tests passed">
+    <img src="https://img.shields.io/badge/tests-98%20passed-0f9f7f?style=flat-square" alt="98 tests passed">
   </p>
 
   <p>
@@ -40,13 +40,13 @@ Codex 飞牛工作台把这些环节放进同一个 fnOS 应用：
 
 ## 核心能力
 
-| 能力 | 0.9.12 中的实现 |
+| 能力 | 0.9.13 中的实现 |
 | --- | --- |
 | 实时对话控制 | 流式回答、中断、官方 `turn/steer` 立即追加；等待队列持久化在 NAS，关闭页面后仍会自动续发，也可手动提前发送 |
 | 飞牛 App 兼容 | 标准 SSE 实时通道；嵌入式 WebView 自动降级为 Fetch 长轮询，断网、回前台与服务重启后自动重连并同步当前会话 |
 | 会话管理 | 创建、恢复、重命名、置顶、归档、删除、全局搜索、重新发送、重新生成与编辑并分支 |
-| 新会话与子代理 | Codex 可显式创建新会话；原生子代理由 Codex 自主委派，主任务等待全部子代理收口；右侧面板可查看完整会话、追加指令、停止、重试，并直接处理批准与输入请求 |
-| fnOS 后台自动化 | 每隔一段时间、每天或每周执行；每次触发创建独立批次和新会话，记录最后阶段、子代理收口、精确错误与运行时间线 |
+| 新会话与子代理 | Codex 可显式创建新会话；原生子代理由 Codex 自主委派，主任务等待全部子代理收口；聊天记录不再插入代理卡片，从右上角图标进入右侧面板查看、追加、停止、重试和处理请求 |
+| fnOS 后台自动化 | 每隔一段时间、每天或每周执行；任务可独立选择供应商、模型和思考强度；Codex 可在用户要求下创建、查看、编辑、暂停、恢复或删除任务 |
 | NAS 文件工作流 | 项目文件、Git diff 与常见产物预览；调用官方 `openFile` / `openFileManager` 打开或定位文件 |
 | Skills 与插件 | 搜索、预览、智能调用、`@` 强制指定；支持 GitHub、`SKILL.md`、ZIP 与标准插件包导入 |
 | 模型与账号 | OpenAI / ChatGPT 设备码或 API Key 登录，多账号隔离；第三方 Responses 与 Chat Completions 自动适配 |
@@ -63,7 +63,7 @@ Codex 飞牛工作台把这些环节放进同一个 fnOS 应用：
 - 模型请求失败、自动重试和空回复会显示在时间线中，可复制具体错误并从原消息重试。
 - `@` 菜单统一搜索已启用 Skills、已安装插件以及当前项目文件和目录。
 - 产物中心聚合 HTML、PDF、图片、音视频、压缩包、FPK 和 APK，并隔离打开可执行网页产物。
-- 深色、墨色主题与可配置背景支持桌面三栏、窄屏工具栏和移动端抽屉布局。
+- 深色、墨色主题与可配置背景支持桌面三栏、窄屏工具栏和移动端抽屉布局；清晰模式会取消图片柔化并降低内容遮罩。
 
 </details>
 
@@ -74,6 +74,8 @@ Codex 飞牛工作台把这些环节放进同一个 fnOS 应用：
 ![定时任务配置](assets/readme/scheduled-task.png)
 
 - 支持固定间隔、每天和每周计划，使用 NAS 系统时区。
+- 每个任务可选择跟随项目默认、官方 OpenAI / ChatGPT 或指定第三方供应商，并单独覆盖模型 ID 与思考强度。
+- Codex 通过本地工作台工具查看、创建和编辑任务；删除只会在用户明确要求时执行，不会删除历史结果会话。
 - 可导入电脑 Codex 的 `automation.toml` 与 `memory.md`，保留 RRULE、模型、思考强度、提示词和记忆。
 - Windows 路径、PowerShell、桌面浏览器登录态和原生工具会先做 fnOS 兼容检查；有阻塞时完整保存但自动暂停。
 - 每次触发创建独立的新会话和批次；旧失败不占用新批次重试次数，应用停止或 NAS 关机时不会伪装成已执行。
@@ -104,7 +106,7 @@ Skills 可以允许 Codex 智能调用，也可以在聊天框中通过 `@` 明�
 
 ### 安装 FPK
 
-1. 从 [v0.9.5 Release](https://github.com/lidachui1998/codex-fnos-web/releases/tag/v0.9.5) 下载 `com.lidachui.codexweb-0.9.5-x86_64.fpk`。
+1. 从 [最新 Release](https://github.com/lidachui1998/codex-fnos-web/releases/latest) 下载 `com.lidachui.codexweb-0.9.13-x86_64.fpk`。
 2. 在 fnOS 应用中心选择手动安装，并上传 FPK。
 3. 打开“Codex 飞牛工作台”，首次使用时设置工作台访问密码。
 4. 登录 OpenAI / ChatGPT，或在设置中添加第三方模型供应商。

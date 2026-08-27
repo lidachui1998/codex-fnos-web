@@ -138,7 +138,7 @@ export class GitHubSkillInstaller {
       const downloadUrl = token
         ? `https://api.github.com/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}/tarball/${encodeURIComponent(source.ref)}`
         : `https://codeload.github.com/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}/tar.gz/${encodeURIComponent(source.ref)}`;
-      const headers = { accept: "application/vnd.github+json", "user-agent": "codex-fnos-web/0.9.12" };
+      const headers = { accept: "application/vnd.github+json", "user-agent": "codex-fnos-web/0.9.13" };
       if (token) headers.authorization = `Bearer ${token}`;
       const response = await this.fetch(downloadUrl, {
         agent: createProviderAgent(this.getProxy()),
