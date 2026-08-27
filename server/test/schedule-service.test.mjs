@@ -157,6 +157,8 @@ test("supports explicit unrestricted tasks while preserving default and legacy i
       { phase: "turn_started", method: "turn/started", summary: "主任务 turn-scheduled" },
       { phase: "completed", method: "turn/completed", summary: "主任务已完成" },
     ]);
+    assert.equal(stores.deleteProvider(provider.id), true);
+    await assert.rejects(service.runNow(task.id), /供应商不存在或已停用/);
 
     const workspaceTask = service.save({
       name: "Workspace check",

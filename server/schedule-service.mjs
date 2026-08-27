@@ -291,7 +291,7 @@ export class ScheduleService {
         ? task.provider_id
         : project.defaultProviderId || null;
     const provider = providerId ? this.stores.listProviders().find((item) => item.id === providerId) : null;
-    if (providerId && (!provider || !provider.enabled)) {
+    if ((providerMode === "provider" && !providerId) || (providerId && (!provider || !provider.enabled))) {
       throw Object.assign(new Error("定时任务使用的供应商不存在或已停用，请先编辑任务"), { status: 409 });
     }
     const scheduledModel = task.model || provider?.model || undefined;
