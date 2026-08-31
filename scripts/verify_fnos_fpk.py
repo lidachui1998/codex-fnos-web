@@ -129,6 +129,8 @@ with tarfile.open(fileobj=io.BytesIO(package_bytes), mode="r:gz") as package:
             "desktop automation import": b"automation.toml",
             "project knowledge index": b"knowledge_chunks_fts",
             "editable file versions": b"file_versions",
+            "account pet settings": b"pet-settings.json",
+            "pet import API": b"/api/pets/import",
         }
         missing_server_markers = [label for label, marker in server_markers.items() if marker not in server_bytes]
         if missing_server_markers:

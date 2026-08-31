@@ -2,13 +2,13 @@
   <img src="assets/app-icon.png" width="96" height="96" alt="Codex 飞牛工作台图标">
   <h1>Codex 飞牛工作台</h1>
   <p><strong>把 Codex 的项目、会话、自动化与扩展能力，带进 fnOS / NAS 的长期运行环境。</strong></p>
-  <p>原生飞牛桌面体验 · 实时对话控制 · 后台定时任务 · Skills 与插件 · 多模型供应商</p>
+  <p>原生飞牛桌面体验 · 实时对话控制 · 后台定时任务 · Codex 宠物 · Skills 与插件 · 多模型供应商</p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-0.10.0-0f9f7f?style=flat-square" alt="Version 0.10.0">
+    <img src="https://img.shields.io/badge/version-0.11.0-0f9f7f?style=flat-square" alt="Version 0.11.0">
     <img src="https://img.shields.io/badge/fnOS-x86__64-1f2937?style=flat-square" alt="fnOS x86_64">
     <img src="https://img.shields.io/badge/Node.js-24%2B-3c873a?style=flat-square" alt="Node.js 24+">
-    <img src="https://img.shields.io/badge/tests-102%20passed-0f9f7f?style=flat-square" alt="102 tests passed">
+    <img src="https://img.shields.io/badge/tests-104%20passed-0f9f7f?style=flat-square" alt="104 tests passed">
   </p>
 
   <p>
@@ -40,12 +40,13 @@ Codex 飞牛工作台把这些环节放进同一个 fnOS 应用：
 
 ## 核心能力
 
-| 能力 | 0.10.0 中的实现 |
+| 能力 | 0.11.0 中的实现 |
 | --- | --- |
 | 实时对话控制 | 流式回答、中断、官方 `turn/steer` 立即追加；等待队列持久化在 NAS，关闭页面后仍会自动续发，也可手动提前发送 |
 | 飞牛 App 兼容 | 标准 SSE 实时通道；嵌入式 WebView 自动降级为 Fetch 长轮询，断网、回前台与服务重启后自动重连并同步当前会话 |
 | 会话管理 | 创建、恢复、重命名、置顶、归档、删除、全局搜索、重新发送、重新生成与编辑并分支 |
 | 新会话与子代理 | Codex 可显式创建新会话；原生子代理由 Codex 自主委派，主任务等待全部子代理收口；聊天记录不再插入代理卡片，从右上角图标进入右侧面板查看、追加、停止、重试和处理请求 |
+| Codex 宠物 | 宠物中心可批量迁移电脑 `.codex/pets` 中的标准 v1/v2 宠物；按 Codex 账户隔离，跟随运行、等待、审查、失败和完成状态切换动画，支持方向观察、拖动、缩放、隐藏与减少动态 |
 | fnOS 后台自动化 | 每隔一段时间、每天或每周执行；任务可独立选择供应商、模型和思考强度；Codex 可在用户要求下创建、查看、编辑、暂停、恢复或删除任务 |
 | 项目知识库 | 可选择项目内 NAS 目录建立本地增量索引；支持中文与代码标识符的跨文件检索，结果返回文件、精确行号、片段与匹配度；Codex 可通过只读 MCP 工具引用这些来源 |
 | 产物编辑画布 | Markdown、HTML、代码与文本产物可直接编辑；自动保存最多 40 个本地版本，支持历史对比、回滚以及回到会话让 Codex 继续修改 |
@@ -66,6 +67,7 @@ Codex 飞牛工作台把这些环节放进同一个 fnOS 应用：
 - 模型请求失败、自动重试和空回复会显示在时间线中，可复制具体错误并从原消息重试。
 - `@` 菜单统一搜索已启用 Skills、已安装插件以及当前项目文件和目录。
 - 产物中心聚合 Markdown、HTML、文本、PDF、图片、音视频、压缩包、FPK 和 APK；文本类产物可编辑和回滚，网页产物仍以隔离方式打开。
+- 宠物包只读取标准清单与 WebP 精灵图，不执行宠物目录中的脚本；移除时进入 NAS 可恢复隔离区。
 - 深色、墨色主题与可配置背景支持桌面三栏、窄屏工具栏和移动端抽屉布局；清晰模式会取消图片柔化并降低内容遮罩。
 
 </details>
@@ -109,7 +111,7 @@ Skills 可以允许 Codex 智能调用，也可以在聊天框中通过 `@` 明�
 
 ### 安装 FPK
 
-1. 从 [最新 Release](https://github.com/lidachui1998/codex-fnos-web/releases/latest) 下载 `com.lidachui.codexweb-0.10.0-x86_64.fpk`。
+1. 从 [最新 Release](https://github.com/lidachui1998/codex-fnos-web/releases/latest) 下载 `com.lidachui.codexweb-0.11.0-x86_64.fpk`。
 2. 在 fnOS 应用中心选择手动安装，并上传 FPK。
 3. 打开“Codex 飞牛工作台”，首次使用时设置工作台访问密码。
 4. 登录 OpenAI / ChatGPT，或在设置中添加第三方模型供应商。
@@ -118,11 +120,11 @@ Skills 可以允许 Codex 智能调用，也可以在聊天框中通过 `@` 明�
 安装包 SHA-256：
 
 ```text
-7FA9871A7148E3F9BB8F86F2B034DB9E9BB6A44D984B1E534A3503610A0FA3A5
+2FCEA25217AC0E812AAA2406F53050B939B619133BB3E910398CA5D8DCA3879F
 ```
 
 > [!TIP]
-> FPK 约 114 MiB，主要因为内置了可在 NAS 上直接运行的 Codex Linux x64 运行时。升级和卸载不会主动删除项目、账号状态或应用密钥。
+> FPK 约 126 MiB，主要因为内置了可在 NAS 上直接运行的 Codex 0.151.0 Linux x64 运行时。升级和卸载不会主动删除项目、账号状态、宠物或应用密钥。
 
 ## 飞牛开放平台集成
 

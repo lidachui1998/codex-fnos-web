@@ -27,6 +27,7 @@ import { handleProviderGateway } from "./provider-gateway.mjs";
 import { NotificationService } from "./notification-service.mjs";
 import { KnowledgeService } from "./knowledge-service.mjs";
 import { OutboxService } from "./outbox-service.mjs";
+import { PetService } from "./pet-service.mjs";
 import { SseHub } from "./sse-hub.mjs";
 import { ScheduleService } from "./schedule-service.mjs";
 import { SkillService } from "./skill-service.mjs";
@@ -106,6 +107,7 @@ const skillInstaller = new GitHubSkillInstaller({
   },
 });
 const extensions = new GlobalExtensionService({ getCodexHome: () => bridge.codexHome });
+const pets = new PetService({ getCodexHome: () => bridge.codexHome });
 const accounts = new AccountService({
   stores,
   bridge,
@@ -166,7 +168,7 @@ function queueBridgeRestart() {
   restartTimer = setTimeout(restartWhenIdle, 400);
 }
 
-const handleApi = createApiHandler({ stores, bridge, accounts, queueBridgeRestart, appearance, updater, workspace, knowledge, skills, extensions, schedules, notifications, subagentJoins, outbox });
+const handleApi = createApiHandler({ stores, bridge, accounts, queueBridgeRestart, appearance, updater, workspace, knowledge, skills, extensions, pets, schedules, notifications, subagentJoins, outbox });
 const loginFailures = new Map();
 const loginWindowMs = 5 * 60 * 1000;
 const maxLoginFailures = 5;

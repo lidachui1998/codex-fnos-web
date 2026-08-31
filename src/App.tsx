@@ -1,10 +1,11 @@
-import { Archive, ArrowDownToLine, ArrowUpToLine, Bell, Bot, Boxes, CalendarClock, Clock3, Code2, CornerDownRight, FileText, Folder, FolderMinus, Image, Menu, MessageSquarePlus, MoreHorizontal, PanelLeft, PanelLeftClose, PanelLeftOpen, Paperclip, Plus, RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Square, Trash2, Wifi, WifiOff, X } from "lucide-react";
+import { Archive, ArrowDownToLine, ArrowUpToLine, Bell, Bot, Boxes, CalendarClock, Clock3, Code2, CornerDownRight, FileText, Folder, FolderMinus, Image, Menu, MessageSquarePlus, MoreHorizontal, PanelLeft, PanelLeftClose, PanelLeftOpen, Paperclip, PawPrint, Plus, RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Square, Trash2, Wifi, WifiOff, X } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent } from "react";
 import { api, ApiError, connectEvents, getEventTransportState, resetEventTransport, subscribeEventTransport, type EventTransportState } from "./api";
 import { createClientId } from "./client-id";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { LoginScreen } from "./components/LoginScreen";
 import { ModelPicker } from "./components/ModelPicker";
+import { PetCompanion } from "./components/PetCompanion";
 import { findSkillMention, matchingPlugins, matchingSkills, SkillMentionMenu, type ProjectFileMention, type SkillMention } from "./components/SkillMentionMenu";
 import { Timeline } from "./components/Timeline";
 import { ThreadMenu } from "./components/ThreadMenu";
@@ -14,6 +15,7 @@ import type { AppEvent, ApprovalPolicy, Bootstrap, NotificationSummary, PendingS
 
 const GlobalSearchDialog = lazy(() => import("./components/GlobalSearchDialog").then((module) => ({ default: module.GlobalSearchDialog })));
 const NotificationCenterDialog = lazy(() => import("./components/NotificationCenterDialog").then((module) => ({ default: module.NotificationCenterDialog })));
+const PetCenterDialog = lazy(() => import("./components/PetCenterDialog").then((module) => ({ default: module.PetCenterDialog })));
 const PluginsDialog = lazy(() => import("./components/PluginsDialog").then((module) => ({ default: module.PluginsDialog })));
 const ProjectDialog = lazy(() => import("./components/ProjectDialog").then((module) => ({ default: module.ProjectDialog })));
 const ScheduledTasksDialog = lazy(() => import("./components/ScheduledTasksDialog").then((module) => ({ default: module.ScheduledTasksDialog })));
@@ -263,6 +265,7 @@ export default function App() {
   const [pluginsDialog, setPluginsDialog] = useState(false);
   const [scheduledTasksDialog, setScheduledTasksDialog] = useState(false);
   const [notificationDialog, setNotificationDialog] = useState(false);
+  const [petCenterDialog, setPetCenterDialog] = useState(false);
   const [notificationRevision, setNotificationRevision] = useState(0);
   const [notificationSummary, setNotificationSummary] = useState<NotificationSummary>({ unread: 0, running: 0, failed: 0, scheduled: 0 });
   const [skillsRevision, setSkillsRevision] = useState(0);
@@ -1935,6 +1938,7 @@ export default function App() {
             />
             <button className="icon-button" disabled={!selectedProject} title="Skills 管理（已启用的 Skill 可智能调用）" aria-label="Skills 管理" onClick={() => { setMobileToolsOpen(false); setSkillsDialog(true); }}><Sparkles size={17} /></button>
             <button className="icon-button" title="插件市场与已安装插件" aria-label="插件" onClick={() => { setMobileToolsOpen(false); setPluginsDialog(true); }}><Boxes size={17} /></button>
+            <button className="icon-button" title="宠物中心" aria-label="宠物中心" onClick={() => { setMobileToolsOpen(false); setPetCenterDialog(true); }}><PawPrint size={17} /></button>
             {resolvedSubagents.length > 0 && <button className={`icon-button notification-button ${selectedSubagentState ? "active-tool" : ""}`} title={`子代理：${runningSubagentCount} 个运行或等待中，${resolvedSubagents.length} 个总计`} aria-label="打开右侧子代理面板" onClick={() => { setMobileToolsOpen(false); setWorkspacePanel(false); setSelectedSubagent(resolvedSubagents[0]); }}><Bot size={17} />{runningSubagentCount > 0 && <span>{runningSubagentCount}</span>}</button>}
             <button className="icon-button" title="定时任务" aria-label="定时任务" onClick={() => { setMobileToolsOpen(false); setScheduledTasksDialog(true); }}><CalendarClock size={17} /></button>
             <button className="icon-button notification-button" title="通知中心" aria-label={`通知中心，${notificationSummary.unread} 条未读`} onClick={() => { setMobileToolsOpen(false); setNotificationDialog(true); }}><Bell size={17} />{notificationSummary.unread > 0 && <span>{notificationSummary.unread > 99 ? "99+" : notificationSummary.unread}</span>}</button>
@@ -1978,6 +1982,15 @@ export default function App() {
         </footer>
       </main>
 
+      <PetCompanion
+        status={bootstrap.pets}
+        running={conversationBusy || sending}
+        waiting={pendingRequests.some((request) => !request.params.threadId || request.params.threadId === selectedThreadId)}
+        reviewing={workspacePanel}
+        failed={!conversationBusy && items.at(-1)?.type === "turnError"}
+        onOpen={() => setPetCenterDialog(true)}
+      />
+
       <Suspense fallback={null}>
         {selectedSubagentState && selectedProject && selectedThreadId && <SubagentPanel rootThreadId={selectedThreadId} agent={selectedSubagentState} agents={resolvedSubagents} projectPath={selectedProject.path} pendingRequests={pendingRequests} onRequestResolved={(id) => setPendingRequests((current) => current.filter((item) => item.id !== id))} onClose={() => setSelectedSubagent(null)} onOpenFile={openWorkspaceFile} onOpenSubagent={setSelectedSubagent} />}
         {workspacePanel && selectedProject && <WorkspacePanel project={selectedProject} items={items} requestedFile={workspaceFileRequest} onClose={() => setWorkspacePanel(false)} onContinueWithCodex={continueWorkspaceFile} onAskKnowledge={askProjectKnowledge} />}
@@ -1986,6 +1999,7 @@ export default function App() {
         {settingsDialog && <SettingsDialog open bootstrap={bootstrap} onClose={() => setSettingsDialog(false)} onChanged={loadBootstrap} />}
         {skillsDialog && <SkillsDialog open project={selectedProject} revision={skillsRevision} onSkillsChange={updateAvailableSkills} onClose={() => setSkillsDialog(false)} />}
         {pluginsDialog && <PluginsDialog open onClose={() => { setPluginsDialog(false); pluginsLoadedRef.current = false; }} />}
+        {petCenterDialog && <PetCenterDialog open status={bootstrap.pets} onClose={() => setPetCenterDialog(false)} onChanged={(pets) => setBootstrap((current) => current ? { ...current, pets } : current)} />}
         {scheduledTasksDialog && <ScheduledTasksDialog open bootstrap={bootstrap} onClose={() => setScheduledTasksDialog(false)} onOpenThread={openScheduledThread} />}
         {notificationDialog && <NotificationCenterDialog open revision={notificationRevision} onClose={() => setNotificationDialog(false)} onOpenThread={openScheduledThread} onSummary={setNotificationSummary} />}
       </Suspense>

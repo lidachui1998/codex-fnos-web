@@ -145,7 +145,7 @@ function publicCodexStatus(value) {
   return result;
 }
 
-export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart, appearance, updater, workspace, knowledge, skills, extensions, schedules, notifications, subagentJoins = null, outbox = null }) {
+export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart, appearance, updater, workspace, knowledge, skills, extensions, pets, schedules, notifications, subagentJoins = null, outbox = null }) {
   const findProject = (id) => stores.listProjects().find((item) => item.id === id);
   const findProvider = (id) => stores.listProviders().find((item) => item.id === id);
   const decorateThread = (thread, extra = {}) => {
@@ -195,7 +195,7 @@ export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart,
         }
       }
       sendJson(res, 200, {
-        version: "0.10.0",
+        version: "0.11.0",
         providers: stores.listProviders(),
         proxies: stores.listProxies(),
         projects: stores.listProjects(),
@@ -206,8 +206,40 @@ export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart,
         activeAccountId: accounts.active().id,
         codex: publicCodexStatus(updater.status()),
         appearance: appearance.status(),
+        pets: pets.status(),
         notificationSummary: notifications.summary(),
       });
+      return;
+    }
+    if (req.method === "GET" && pathname === "/api/pets") {
+      sendJson(res, 200, pets.status());
+      return;
+    }
+    if (req.method === "POST" && pathname === "/api/pets/import") {
+      sendJson(res, 201, pets.import(await readJson(req, 12 * 1024 * 1024)));
+      return;
+    }
+    if (req.method === "PATCH" && pathname === "/api/pets/settings") {
+      sendJson(res, 200, pets.updateSettings(await readJson(req)));
+      return;
+    }
+    params = route(req.method, pathname, { method: "GET", path: /^\/api\/pets\/(?<id>[^/]+)\/spritesheet$/ });
+    if (params) {
+      const asset = pets.asset(decodeURIComponent(params.id));
+      res.writeHead(200, {
+        "cache-control": "private, max-age=31536000, immutable",
+        "content-disposition": `inline; filename=${JSON.stringify(asset.filename)}`,
+        "content-length": asset.bytes,
+        "content-type": "image/webp",
+        etag: asset.etag,
+        "x-content-type-options": "nosniff",
+      });
+      createReadStream(asset.path).pipe(res);
+      return;
+    }
+    params = route(req.method, pathname, { method: "DELETE", path: /^\/api\/pets\/(?<id>[^/]+)$/ });
+    if (params) {
+      sendJson(res, 200, pets.delete(decodeURIComponent(params.id)));
       return;
     }
     if (req.method === "GET" && pathname === "/api/outbox") {

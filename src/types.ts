@@ -343,6 +343,30 @@ export type AccountRateLimits = {
   rateLimitResetCredits?: { availableCount?: number } | null;
 };
 
+export type PetSummary = {
+  id: string;
+  displayName: string;
+  description: string;
+  spriteVersionNumber: 1 | 2;
+  width: number;
+  height: number;
+  bytes: number;
+  updatedAt: number;
+};
+
+export type PetSettings = {
+  activePetId: string | null;
+  visible: boolean;
+  motion: "full" | "reduced";
+  scale: number;
+};
+
+export type PetStatus = {
+  pets: PetSummary[];
+  errors: Array<{ id: string; message: string }>;
+  settings: PetSettings;
+};
+
 export type Bootstrap = {
   version: string;
   providers: ProviderProfile[];
@@ -370,6 +394,7 @@ export type Bootstrap = {
   activeAccountId: string;
   codex: CodexUpdateState;
   appearance: { hasBackground: boolean; updatedAt: number | null };
+  pets: PetStatus;
   notificationSummary: NotificationSummary;
 };
 
