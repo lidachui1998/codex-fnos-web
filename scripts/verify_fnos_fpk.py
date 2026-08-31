@@ -127,6 +127,8 @@ with tarfile.open(fileobj=io.BytesIO(package_bytes), mode="r:gz") as package:
             "recoverable account deletion": b"deleted-accounts",
             "scheduled task auto approval": b'approval_mode = "approve"',
             "desktop automation import": b"automation.toml",
+            "project knowledge index": b"knowledge_chunks_fts",
+            "editable file versions": b"file_versions",
         }
         missing_server_markers = [label for label, marker in server_markers.items() if marker not in server_bytes]
         if missing_server_markers:
@@ -134,7 +136,7 @@ with tarfile.open(fileobj=io.BytesIO(package_bytes), mode="r:gz") as package:
 
         schedule_mcp_source = app.extractfile("server/server/schedule-mcp.mjs")
         schedule_mcp_bytes = schedule_mcp_source.read() if schedule_mcp_source else b""
-        expected_mcp_tools = (b"create_scheduled_task", b"list_scheduled_tasks", b"create_global_skill", b"create_global_plugin")
+        expected_mcp_tools = (b"search_project_knowledge", b"create_scheduled_task", b"list_scheduled_tasks", b"create_global_skill", b"create_global_plugin")
         if any(tool not in schedule_mcp_bytes for tool in expected_mcp_tools):
             raise SystemExit("Bundled schedule MCP does not contain the expected tools")
 

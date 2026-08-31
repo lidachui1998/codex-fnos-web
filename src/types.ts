@@ -52,9 +52,15 @@ export type ThreadItem = {
   cwd?: string;
   status?: string;
   aggregatedOutput?: string;
+  progress?: string;
   exitCode?: number | null;
   durationMs?: number | null;
+  commandActions?: Array<{ type?: string; path?: string; name?: string }>;
   changes?: Array<{ path: string; kind: string; diff?: string }>;
+  action?: { type?: string; query?: string | null; queries?: string[] | null; url?: string | null; pattern?: string | null } | null;
+  results?: unknown[] | null;
+  query?: string;
+  observedAt?: number | null;
   summary?: string[];
   tool?: string;
   server?: string;

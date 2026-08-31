@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { openDatabase } from "../database.mjs";
+import { searchTerms } from "../knowledge-service.mjs";
 import { ScheduleToolStore, handleScheduleMcpRequest } from "../schedule-mcp.mjs";
 import { Stores } from "../stores.mjs";
 
@@ -101,7 +102,33 @@ test("exposes create and list tool definitions over MCP", () => {
     });
     assert.equal(initialized.serverInfo.name, "fnos-workbench");
     const result = handleScheduleMcpRequest(store, { method: "tools/list" });
-    assert.deepEqual(result.tools.map((tool) => tool.name), ["create_scheduled_task", "list_scheduled_tasks", "update_scheduled_task", "delete_scheduled_task", "create_new_conversation", "create_global_skill", "create_global_plugin"]);
+    assert.deepEqual(result.tools.map((tool) => tool.name), ["search_project_knowledge", "create_scheduled_task", "list_scheduled_tasks", "update_scheduled_task", "delete_scheduled_task", "create_new_conversation", "create_global_skill", "create_global_plugin"]);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("searches indexed NAS knowledge and returns a file citation through MCP", () => {
+  const { root, databasePath, workspace, project } = fixture();
+  const store = new ScheduleToolStore(databasePath);
+  try {
+    const timestamp = Math.floor(Date.now() / 1000);
+    store.db.prepare("INSERT INTO project_knowledge (project_id, directory, enabled, state, last_indexed_at, updated_at) VALUES (?, '', 1, 'ready', ?, ?)")
+      .run(project.id, timestamp, timestamp);
+    const content = "登录状态保存在本地数据库，重启后会自动恢复。";
+    const terms = searchTerms(`docs/session.md\n${content}`).join(" ");
+    const chunk = store.db.prepare("INSERT INTO knowledge_chunks (project_id, path, chunk_index, start_line, end_line, content, search_text, content_hash) VALUES (?, ?, 0, 3, 3, ?, ?, 'hash')")
+      .run(project.id, "docs/session.md", content, terms);
+    store.db.prepare("INSERT INTO knowledge_chunks_fts (rowid, path, content, search_text) VALUES (?, ?, ?, ?)")
+      .run(chunk.lastInsertRowid, "docs/session.md", content, terms);
+    const result = handleScheduleMcpRequest(store, {
+      method: "tools/call",
+      params: { name: "search_project_knowledge", arguments: { query: "登录状态", projectPath: workspace } },
+    });
+    assert.equal(result.structuredContent.data[0].path, "docs/session.md");
+    assert.equal(result.structuredContent.data[0].citation, "docs/session.md:3-3");
+    assert.match(result.structuredContent.citationInstruction, /回答时引用/);
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });

@@ -51,7 +51,7 @@ export async function testProxy(proxy, target = "https://api.openai.com/v1/model
   try {
     const response = await fetch(target, {
       agent: createProviderAgent(proxy),
-      headers: { "user-agent": "codex-fnos-web/0.9.13" },
+      headers: { "user-agent": "codex-fnos-web/0.10.0" },
       redirect: "manual",
       signal: AbortSignal.timeout(12_000),
     });
@@ -154,24 +154,34 @@ export async function listProviderModels(provider, proxy) {
   return models;
 }
 
-export async function forwardResponses(provider, proxy, requestBody, requestHeaders) {
-  return fetch(endpoint(provider.base_url, "responses"), {
+async function fetchStreamingResponse(url, init, responseTimeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), responseTimeoutMs);
+  try {
+    // The timeout only guards the wait for response headers. Once an SSE stream
+    // is established, its body may legitimately run for much longer.
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function forwardResponses(provider, proxy, requestBody, requestHeaders, responseTimeoutMs = 10 * 60_000) {
+  return fetchStreamingResponse(endpoint(provider.base_url, "responses"), {
     agent: createProviderAgent(proxy),
     body: JSON.stringify({ ...requestBody, model: requestBody.model || provider.model }),
     headers: providerHeaders(provider, {
       accept: requestHeaders.accept ?? "text/event-stream",
     }),
     method: "POST",
-    signal: AbortSignal.timeout(10 * 60_000),
-  });
+  }, responseTimeoutMs);
 }
 
-export async function requestChatCompletions(provider, proxy, requestBody) {
-  return fetch(endpoint(provider.base_url, "chat/completions"), {
+export async function requestChatCompletions(provider, proxy, requestBody, responseTimeoutMs = 10 * 60_000) {
+  return fetchStreamingResponse(endpoint(provider.base_url, "chat/completions"), {
     agent: createProviderAgent(proxy),
     body: JSON.stringify(requestBody),
     headers: providerHeaders(provider),
     method: "POST",
-    signal: AbortSignal.timeout(10 * 60_000),
-  });
+  }, responseTimeoutMs);
 }

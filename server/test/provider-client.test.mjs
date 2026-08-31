@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
-import { listProviderModels, parseProviderModels, proxyUrlForTarget } from "../provider-client.mjs";
+import { forwardResponses, listProviderModels, parseProviderModels, proxyUrlForTarget } from "../provider-client.mjs";
 
 test("normalizes common supplier model-list response shapes", () => {
   assert.deepEqual(parseProviderModels({ data: [{ id: "model-b" }, { id: "model-a" }] }), ["model-a", "model-b"]);
@@ -29,6 +29,31 @@ test("requests Base URL plus /models with the configured API key", async () => {
       headers: {},
     }, null);
     assert.deepEqual(models, ["coder", "coder-fast"]);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("keeps an established Responses stream alive past the response-header timeout", async () => {
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.flushHeaders();
+    res.write('data: {"type":"response.created"}\n\n');
+    setTimeout(() => res.end('data: {"type":"response.completed"}\n\n'), 35);
+  });
+  const port = await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve(server.address().port));
+  });
+  try {
+    const response = await forwardResponses({
+      base_url: `http://127.0.0.1:${port}/v1`,
+      apiKey: "test-key",
+      headers: {},
+      model: "test-model",
+    }, null, { stream: true }, { accept: "text/event-stream" }, 10);
+    const body = await response.text();
+    assert.match(body, /response\.completed/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

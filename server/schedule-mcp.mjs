@@ -4,6 +4,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { computeNextRun, normalizeSchedule } from "./schedule-rules.mjs";
 import { GlobalExtensionService } from "./global-extension-service.mjs";
+import { searchKnowledgeDatabase } from "./knowledge-service.mjs";
 
 const now = () => Math.floor(Date.now() / 1000);
 
@@ -111,6 +112,26 @@ export class ScheduleToolStore {
           ORDER BY task.updated_at DESC
         `).all();
     return rows.map(publicTask);
+  }
+
+  searchKnowledge(input) {
+    const project = this.#project(input.projectPath);
+    const query = String(input.query || "").trim();
+    if (!query) throw new Error("知识库搜索内容不能为空");
+    const status = this.db.prepare("SELECT * FROM project_knowledge WHERE project_id = ?").get(project.id);
+    if (!status || !status.enabled) {
+      return { query, projectPath: project.path, state: "disabled", data: [], message: "这个项目尚未启用知识库索引" };
+    }
+    const data = searchKnowledgeDatabase(this.db, project.id, query, input.limit || 8);
+    return {
+      query,
+      projectPath: project.path,
+      directory: status.directory || "",
+      state: status.state,
+      lastIndexedAt: status.last_indexed_at,
+      data,
+      citationInstruction: "回答时引用每条结果的 citation；链接可写成 [文件名](相对路径#L行号)。",
+    };
   }
 
   create(input) {
@@ -250,6 +271,22 @@ const taskOptionProperties = {
 
 const tools = [
   {
+    name: "search_project_knowledge",
+    title: "搜索项目知识库",
+    description: "在用户选择的 NAS 项目目录中跨文件检索相关内容。回答项目文档、历史方案、配置说明或代码约定前优先使用；结果包含相对路径、精确行号、片段和 citation，回答时必须标明信息来自哪个文件。该工具只读且数据留在 NAS。",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        query: { type: "string", minLength: 1, maxLength: 1000, description: "自然语言问题或要查找的概念" },
+        projectPath: { type: "string", description: "当前项目绝对路径；工作台只有一个项目时可省略" },
+        limit: { type: "integer", minimum: 1, maximum: 20, description: "返回片段数，默认 8" },
+      },
+      required: ["query"],
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
     name: "create_scheduled_task",
     title: "创建飞牛定时任务",
     description: "在 Codex 飞牛工作台中创建无人值守定时任务。用户明确要求创建、安排、每天、每周或每隔一段时间执行任务时使用。创建成功后必须向用户复述任务名称、计划、项目和任务 ID。",
@@ -373,13 +410,14 @@ export function handleScheduleMcpRequest(store, message, extensions, conversatio
     return {
       protocolVersion: message.params?.protocolVersion || "2025-06-18",
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: "fnos-workbench", version: "0.9.13" },
+      serverInfo: { name: "fnos-workbench", version: "0.10.0" },
     };
   }
   if (message.method === "ping") return {};
   if (message.method === "tools/list") return { tools };
   if (message.method === "tools/call") {
     const args = message.params?.arguments || {};
+    if (message.params?.name === "search_project_knowledge") return toolResult(store.searchKnowledge(args));
     if (message.params?.name === "create_scheduled_task") return toolResult(store.create(args));
     if (message.params?.name === "list_scheduled_tasks") return toolResult({ data: store.list(args.projectPath) });
     if (message.params?.name === "update_scheduled_task") return toolResult(store.update(args.taskId, args));

@@ -22,9 +22,18 @@ const SkillsDialog = lazy(() => import("./components/SkillsDialog").then((module
 const SubagentPanel = lazy(() => import("./components/SubagentPanel").then((module) => ({ default: module.SubagentPanel })));
 const WorkspacePanel = lazy(() => import("./components/WorkspacePanel").then((module) => ({ default: module.WorkspacePanel })));
 const automaticJoinClientIdPrefix = "fnos-subagent-join-";
+const progressItemTypes = new Set(["commandExecution", "fileChange", "mcpToolCall", "webSearch", "dynamicToolCall", "contextCompaction"]);
 
 function visibleTurnItem(item: ThreadItem) {
   return !(item.type === "userMessage" && item.clientId?.startsWith(automaticJoinClientIdPrefix));
+}
+
+function withLifecycleStatus(item: ThreadItem, status: "inProgress" | "completed") {
+  return progressItemTypes.has(item.type) && !item.status ? { ...item, status } : item;
+}
+
+function withObservedTime(item: ThreadItem, fallbackMs = Date.now()) {
+  return item.type === "webSearch" && !item.observedAt ? { ...item, observedAt: fallbackMs } : item;
 }
 
 function upsertItem(items: ThreadItem[], next: ThreadItem) {
@@ -57,7 +66,8 @@ function attachTurnTiming(items: ThreadItem[], turn: Turn) {
 
 function transcript(thread?: Thread | null) {
   return thread?.turns?.flatMap((turn) => {
-    let items: ThreadItem[] = (turn.items ?? []).filter(visibleTurnItem).map((item) => ({ ...item, turnId: turn.id }));
+    const observedAt = Number(turn.completedAt ?? turn.startedAt ?? 0) * 1000 || Date.now();
+    let items: ThreadItem[] = (turn.items ?? []).filter(visibleTurnItem).map((item) => ({ ...withObservedTime(withLifecycleStatus(item, turn.status === "inProgress" ? "inProgress" : "completed"), observedAt), turnId: turn.id }));
     const hasAgentReply = items.some((item) => (item.type === "agentMessage" || item.type === "plan") && item.text?.trim());
     if (turn.status === "failed") items.push(turnErrorItem(turn.id, turn.error, false, false, turn));
     else if (turn.status === "completed" && !hasAgentReply && items.some((item) => item.type === "userMessage")) items.push(turnErrorItem(turn.id, null, true, false, turn));
@@ -243,6 +253,7 @@ export default function App() {
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [subagentJoin, setSubagentJoin] = useState<SubagentJoinState | null>(null);
   const [activeTurnStartedAtMs, setActiveTurnStartedAtMs] = useState<number | null>(null);
+  const [lastTurnActivityAtMs, setLastTurnActivityAtMs] = useState<number | null>(null);
   const [composer, setComposer] = useState("");
   const [sending, setSending] = useState(false);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
@@ -277,6 +288,8 @@ export default function App() {
   const activeTurnStartedAtRef = useRef<number | null>(null);
   const selectionProjectRef = useRef<string | null | undefined>(undefined);
   const deltaQueue = useRef(new Map<string, string>());
+  const deltaItemTypes = useRef(new Map<string, "agentMessage" | "plan">());
+  const outputDeltaQueue = useRef(new Map<string, string>());
   const deltaFrame = useRef<number | null>(null);
   const optimisticUserItemId = useRef<string | null>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -449,6 +462,8 @@ export default function App() {
 
   function discardPendingDeltas() {
     deltaQueue.current.clear();
+    deltaItemTypes.current.clear();
+    outputDeltaQueue.current.clear();
     if (deltaFrame.current !== null) cancelAnimationFrame(deltaFrame.current);
     deltaFrame.current = null;
     setStreamingItemId(null);
@@ -466,6 +481,7 @@ export default function App() {
     setSubagentJoin(null);
     setActiveTurnId(null);
     setActiveTurnStartedAtMs(null);
+    setLastTurnActivityAtMs(null);
     setStreamingItemId(null);
   }
 
@@ -654,17 +670,25 @@ export default function App() {
   useEffect(() => subscribeEventTransport(setEventTransport), []);
 
   const flushDeltas = useCallback(() => {
-    const queued = new Map(deltaQueue.current);
+    const queuedText = new Map(deltaQueue.current);
+    const queuedOutput = new Map(outputDeltaQueue.current);
     deltaQueue.current.clear();
+    outputDeltaQueue.current.clear();
     deltaFrame.current = null;
-    if (queued.size === 0) return;
+    if (queuedText.size === 0 && queuedOutput.size === 0) return;
     setItems((current) => {
       let next = current;
-      for (const [id, delta] of queued) {
+      for (const [id, delta] of queuedText) {
         const existing = next.find((item) => item.id === id);
         next = upsertItem(next, existing
           ? { ...existing, text: `${existing.text ?? ""}${delta}` }
-          : { id, type: "agentMessage", text: delta });
+          : { id, type: deltaItemTypes.current.get(id) ?? "agentMessage", text: delta });
+      }
+      for (const [id, delta] of queuedOutput) {
+        const existing = next.find((item) => item.id === id);
+        next = upsertItem(next, existing
+          ? { ...existing, aggregatedOutput: `${existing.aggregatedOutput ?? ""}${delta}` }
+          : { id, type: "commandExecution", status: "inProgress", aggregatedOutput: delta });
       }
       return next;
     });
@@ -691,6 +715,8 @@ export default function App() {
       const resumedItems = transcript(resumedThread);
       const cached = conversationCacheRef.current.get(threadId);
       deltaQueue.current.clear();
+      deltaItemTypes.current.clear();
+      outputDeltaQueue.current.clear();
       if (deltaFrame.current !== null) cancelAnimationFrame(deltaFrame.current);
       deltaFrame.current = null;
       setStreamingItemId(null);
@@ -717,6 +743,9 @@ export default function App() {
       setActiveTurnId(restoredTurnId);
       activeTurnStartedAtRef.current = restoredStartedAtMs;
       setActiveTurnStartedAtMs(restoredStartedAtMs);
+      setLastTurnActivityAtMs(resumedRunning
+        ? Number.isFinite(resumedThread.updatedAt) ? Number(resumedThread.updatedAt) * 1000 : restoredStartedAtMs
+        : null);
       const restoredJoin = result.subagentJoin ?? null;
       subagentJoinWaitingRef.current = Boolean(restoredJoin);
       setSubagentJoin(restoredJoin);
@@ -814,6 +843,9 @@ export default function App() {
         : thread));
     }
     if (params.threadId && params.threadId !== selectedThreadRef.current) return;
+    if (event.method === "error" || event.method.startsWith("turn/") || event.method.startsWith("item/")) {
+      setLastTurnActivityAtMs(Date.now());
+    }
     if (event.method === "error") {
       const turnId = activeTurnIdRef.current || `current-${params.threadId || "thread"}`;
       setItems((current) => upsertItem(current, turnErrorItem(turnId, params.error, false, Boolean(params.willRetry))));
@@ -827,11 +859,12 @@ export default function App() {
       activeTurnIdRef.current = params.turn?.id ?? null;
       activeTurnStartedAtRef.current = startedAtMs;
       setActiveTurnStartedAtMs(startedAtMs);
+      setLastTurnActivityAtMs(Date.now());
       return;
     }
     if (event.method === "item/started" && params.item) {
       if (!visibleTurnItem(params.item)) return;
-      const eventItem = { ...params.item, turnId: params.turnId ?? params.turn?.id };
+      const eventItem = { ...withObservedTime(withLifecycleStatus(params.item, "inProgress")), turnId: params.turnId ?? params.turn?.id };
       if (params.item.type === "userMessage" && optimisticUserItemId.current) {
         const optimisticId = optimisticUserItemId.current;
         optimisticUserItemId.current = null;
@@ -847,6 +880,15 @@ export default function App() {
     }
     if (event.method === "item/agentMessage/delta") {
       const itemId = String(params.itemId);
+      deltaItemTypes.current.set(itemId, "agentMessage");
+      deltaQueue.current.set(itemId, `${deltaQueue.current.get(itemId) ?? ""}${params.delta ?? ""}`);
+      setStreamingItemId(itemId);
+      if (deltaFrame.current === null) deltaFrame.current = requestAnimationFrame(flushDeltas);
+      return;
+    }
+    if (event.method === "item/plan/delta") {
+      const itemId = String(params.itemId);
+      deltaItemTypes.current.set(itemId, "plan");
       deltaQueue.current.set(itemId, `${deltaQueue.current.get(itemId) ?? ""}${params.delta ?? ""}`);
       setStreamingItemId(itemId);
       if (deltaFrame.current === null) deltaFrame.current = requestAnimationFrame(flushDeltas);
@@ -854,18 +896,56 @@ export default function App() {
     }
     if (event.method === "item/reasoning/summaryTextDelta") {
       const itemId = String(params.itemId);
+      const summaryIndex = Number.isFinite(params.summaryIndex) ? Math.max(0, Number(params.summaryIndex)) : 0;
       setItems((current) => {
         const existing = current.find((item) => item.id === itemId);
-        return upsertItem(current, { ...(existing ?? { id: itemId, type: "reasoning" }), summary: [`${existing?.summary?.[0] ?? ""}${params.delta ?? ""}`] });
+        const summary = [...(existing?.summary ?? [])];
+        summary[summaryIndex] = `${summary[summaryIndex] ?? ""}${params.delta ?? ""}`;
+        return upsertItem(current, { ...(existing ?? { id: itemId, type: "reasoning" }), summary });
+      });
+      return;
+    }
+    if (event.method === "item/reasoning/summaryPartAdded") {
+      const itemId = String(params.itemId);
+      const summaryIndex = Number.isFinite(params.summaryIndex) ? Math.max(0, Number(params.summaryIndex)) : 0;
+      setItems((current) => {
+        const existing = current.find((item) => item.id === itemId);
+        const summary = [...(existing?.summary ?? [])];
+        if (summary[summaryIndex] === undefined) summary[summaryIndex] = "";
+        return upsertItem(current, { ...(existing ?? { id: itemId, type: "reasoning" }), summary });
+      });
+      return;
+    }
+    if (event.method === "item/commandExecution/outputDelta") {
+      const itemId = String(params.itemId);
+      outputDeltaQueue.current.set(itemId, `${outputDeltaQueue.current.get(itemId) ?? ""}${params.delta ?? ""}`);
+      if (deltaFrame.current === null) deltaFrame.current = requestAnimationFrame(flushDeltas);
+      return;
+    }
+    if (event.method === "item/mcpToolCall/progress") {
+      const itemId = String(params.itemId);
+      setItems((current) => {
+        const existing = current.find((item) => item.id === itemId);
+        return upsertItem(current, { ...(existing ?? { id: itemId, type: "mcpToolCall", status: "inProgress" }), progress: String(params.message ?? "") });
+      });
+      return;
+    }
+    if (event.method === "item/fileChange/patchUpdated") {
+      const itemId = String(params.itemId);
+      setItems((current) => {
+        const existing = current.find((item) => item.id === itemId);
+        return upsertItem(current, { ...(existing ?? { id: itemId, type: "fileChange", status: "inProgress" }), changes: Array.isArray(params.changes) ? params.changes : existing?.changes });
       });
       return;
     }
     if (event.method === "item/completed" && params.item) {
       if (!visibleTurnItem(params.item)) return;
       deltaQueue.current.delete(params.item.id);
+      deltaItemTypes.current.delete(params.item.id);
+      outputDeltaQueue.current.delete(params.item.id);
       setItems((current) => {
         const existing = current.find((item) => item.id === params.item.id);
-        return upsertItem(current, { ...params.item, turnId: params.turnId ?? params.turn?.id ?? existing?.turnId });
+        return upsertItem(current, { ...withObservedTime(withLifecycleStatus(params.item, "completed"), existing?.observedAt ?? Date.now()), turnId: params.turnId ?? params.turn?.id ?? existing?.turnId });
       });
       setStreamingItemId((current) => current === params.item.id ? null : current);
       return;
@@ -886,7 +966,7 @@ export default function App() {
       };
       setItems((current) => {
         let next = current.filter((item) => item.id !== `turn-error:${turnId}`);
-        for (const item of (Array.isArray(turn.items) ? turn.items : []).filter(visibleTurnItem)) next = upsertItem(next, { ...item, turnId });
+        for (const item of (Array.isArray(turn.items) ? turn.items : []).filter(visibleTurnItem)) next = upsertItem(next, { ...withLifecycleStatus(item, "completed"), turnId });
         const hasReply = next.some((item) => item.turnId === turnId && (item.type === "agentMessage" || item.type === "plan") && item.text?.trim());
         if (turn.status === "failed") return upsertItem(next, turnErrorItem(turnId, turn.error, false, false, completedTurn));
         if (turn.status === "completed" && !hasReply) return upsertItem(next, turnErrorItem(turnId, null, true, false, completedTurn));
@@ -901,6 +981,7 @@ export default function App() {
       activeTurnIdRef.current = null;
       activeTurnStartedAtRef.current = null;
       setActiveTurnStartedAtMs(null);
+      setLastTurnActivityAtMs(null);
       setStreamingItemId(null);
     }
   }, [flushDeltas, loadBootstrap, loadQueuedMessages, resyncSelectedThread, selectedProjectId]);
@@ -1028,6 +1109,22 @@ export default function App() {
   function openWorkspaceFile(path: string) {
     setWorkspaceFileRequest({ path, nonce: Date.now() });
     setWorkspacePanel(true);
+  }
+
+  function prepareComposer(value: string) {
+    setComposer(value);
+    requestAnimationFrame(() => {
+      composerRef.current?.focus();
+      composerRef.current?.setSelectionRange(value.length, value.length);
+    });
+  }
+
+  function continueWorkspaceFile(path: string) {
+    prepareComposer(`请继续修改项目文件 \`${path}\`：`);
+  }
+
+  function askProjectKnowledge(query: string) {
+    prepareComposer(`请先调用 search_project_knowledge 检索当前项目知识库，再根据检索结果回答并标明来源文件：\n\n${query}`);
   }
 
   function updateSkillMention(value: string, cursor: number) {
@@ -1249,6 +1346,9 @@ export default function App() {
       setActiveTurnId(restoredTurnId);
       activeTurnStartedAtRef.current = restoredStartedAtMs;
       setActiveTurnStartedAtMs(restoredStartedAtMs);
+      setLastTurnActivityAtMs(resumedRunning
+        ? Number.isFinite(resumedThread.updatedAt) ? Number(resumedThread.updatedAt) * 1000 : restoredStartedAtMs
+        : null);
       const providerId = threadProviderId(resumedThread);
       const saved = savedModelSelection(projectOverride?.id ?? selectedProject?.id ?? null, result.thread.id);
       setSelectedProviderId(providerId);
@@ -1852,7 +1952,7 @@ export default function App() {
             ) : (
               <div className="conversation-inner">
                 {threadLoading && items.length === 0 && <div className="conversation-loading" role="status"><span className="spin" />正在载入聊天记录…</div>}
-                <Timeline key={selectedThreadId ?? "empty"} items={items} streamingItemId={streamingItemId} turnRunning={conversationBusy} activeTurnStartedAtMs={activeTurnStartedAtMs} retryProviders={retryProviders} retryProviderId={retryProviderId} projectPath={selectedProject.path} onOpenFile={openWorkspaceFile} onSuggestion={(text) => setComposer(text)} onResend={(item, providerId) => void resendUserMessage(item, providerId)} onRegenerate={regenerateMessage} onEditBranch={(item) => void editAndBranch(item)} />
+                <Timeline key={selectedThreadId ?? "empty"} items={items} streamingItemId={streamingItemId} turnRunning={conversationBusy} activeTurnStartedAtMs={activeTurnStartedAtMs} lastTurnActivityAtMs={lastTurnActivityAtMs} retryProviders={retryProviders} retryProviderId={retryProviderId} projectPath={selectedProject.path} onOpenFile={openWorkspaceFile} onSuggestion={(text) => setComposer(text)} onResend={(item, providerId) => void resendUserMessage(item, providerId)} onRegenerate={regenerateMessage} onEditBranch={(item) => void editAndBranch(item)} />
                 {pendingRequests.filter((request) => !request.params.threadId || request.params.threadId === selectedThreadId).map((request) => request.method === "item/tool/requestUserInput"
                   ? <UserInputCard key={request.id} request={request} onResolved={(id) => setPendingRequests((current) => current.filter((item) => item.id !== id))} />
                   : <ApprovalCard key={request.id} request={request} onResolved={(id) => setPendingRequests((current) => current.filter((item) => item.id !== id))} />)}
@@ -1880,7 +1980,7 @@ export default function App() {
 
       <Suspense fallback={null}>
         {selectedSubagentState && selectedProject && selectedThreadId && <SubagentPanel rootThreadId={selectedThreadId} agent={selectedSubagentState} agents={resolvedSubagents} projectPath={selectedProject.path} pendingRequests={pendingRequests} onRequestResolved={(id) => setPendingRequests((current) => current.filter((item) => item.id !== id))} onClose={() => setSelectedSubagent(null)} onOpenFile={openWorkspaceFile} onOpenSubagent={setSelectedSubagent} />}
-        {workspacePanel && selectedProject && <WorkspacePanel project={selectedProject} items={items} requestedFile={workspaceFileRequest} onClose={() => setWorkspacePanel(false)} />}
+        {workspacePanel && selectedProject && <WorkspacePanel project={selectedProject} items={items} requestedFile={workspaceFileRequest} onClose={() => setWorkspacePanel(false)} onContinueWithCodex={continueWorkspaceFile} onAskKnowledge={askProjectKnowledge} />}
         {projectDialog && <ProjectDialog open bootstrap={bootstrap} onClose={() => setProjectDialog(false)} onCreated={loadBootstrap} />}
         {globalSearchOpen && <GlobalSearchDialog open onClose={() => setGlobalSearchOpen(false)} onSelect={selectSearchResult} />}
         {settingsDialog && <SettingsDialog open bootstrap={bootstrap} onClose={() => setSettingsDialog(false)} onChanged={loadBootstrap} />}

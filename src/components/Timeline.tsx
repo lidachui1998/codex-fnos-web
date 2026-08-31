@@ -1,5 +1,5 @@
-import { AlertTriangle, Bot, Check, CheckCircle2, ChevronDown, ChevronRight, Clock3, Copy, FileCode2, LoaderCircle, Maximize2, Pencil, RefreshCw, RotateCcw, TerminalSquare, UserRound, Wrench, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Activity, AlertTriangle, Bot, BrainCircuit, Check, CheckCircle2, ChevronDown, ChevronRight, Clock3, Copy, ExternalLink, FileCode2, Globe2, LoaderCircle, Maximize2, Pencil, RefreshCw, RotateCcw, Search, TerminalSquare, UserRound, Wrench, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ThreadItem } from "../types";
@@ -31,27 +31,158 @@ function userImages(item: ThreadItem) {
     .map((part) => part.url as string) ?? [];
 }
 
+function compactText(value: string | undefined, limit = 150) {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+}
+
+type WebSource = { url: string; title: string; snippet: string; fetchedAt: number | null };
+
+function webUrl(value: unknown) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!/^https?:\/\//i.test(text)) return null;
+  try { return new URL(text).toString(); } catch { return null; }
+}
+
+function sourceRecord(value: unknown, fetchedAt: number | null): WebSource | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const nested = [record, record.source, record.document, record.page].filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"));
+  const first = (keys: string[]) => {
+    for (const item of nested) for (const key of keys) if (typeof item[key] === "string" && String(item[key]).trim()) return String(item[key]).trim();
+    return "";
+  };
+  const url = webUrl(first(["url", "link", "uri", "source_url", "sourceUrl"]));
+  if (!url) return null;
+  const title = first(["title", "name", "headline"]) || new URL(url).hostname;
+  const snippet = compactText(first(["snippet", "excerpt", "description", "text", "content"]), 300);
+  return { url, title, snippet, fetchedAt };
+}
+
+function webSearchSources(item: ThreadItem) {
+  const fetchedAt = Number.isFinite(item.observedAt) ? Number(item.observedAt) : null;
+  const sources = (Array.isArray(item.results) ? item.results : []).map((result) => sourceRecord(result, fetchedAt)).filter((source): source is WebSource => Boolean(source));
+  const actionUrl = webUrl(item.action?.url);
+  if (actionUrl) sources.push({ url: actionUrl, title: new URL(actionUrl).hostname, snippet: item.action?.pattern ? `页内查找：${item.action.pattern}` : "模型打开了这个网页", fetchedAt });
+  return sources;
+}
+
+function markdownSources(text: string, fetchedAt: number | null) {
+  const sources: WebSource[] = [];
+  const pattern = /\[([^\]]+)]\((https?:\/\/[^\s)]+)(?:\s+"[^"]*")?\)/gi;
+  for (const match of text.matchAll(pattern)) {
+    const url = webUrl(match[2]);
+    if (!url) continue;
+    const start = Math.max(0, (match.index ?? 0) - 120);
+    const end = Math.min(text.length, (match.index ?? 0) + match[0].length + 160);
+    const snippet = compactText(text.slice(start, end).replace(/\[([^\]]+)]\(([^)]+)\)/g, "$1"), 280);
+    sources.push({ url, title: compactText(match[1], 140) || new URL(url).hostname, snippet, fetchedAt });
+  }
+  return sources;
+}
+
+function dedupeSources(values: WebSource[]) {
+  const sources = new Map<string, WebSource>();
+  for (const value of values) {
+    const existing = sources.get(value.url);
+    sources.set(value.url, existing ? {
+      ...existing,
+      title: existing.title || value.title,
+      snippet: existing.snippet || value.snippet,
+      fetchedAt: existing.fetchedAt ?? value.fetchedAt,
+    } : value);
+  }
+  return [...sources.values()].slice(0, 12);
+}
+
+function sourceTime(value: number | null) {
+  return value ? new Date(value).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "本次回答";
+}
+
+function WebSources({ sources, compact = false }: { sources: WebSource[]; compact?: boolean }) {
+  if (!sources.length) return null;
+  return <section className={`web-sources ${compact ? "compact" : ""}`}>
+    <header><Globe2 size={14} /><strong>网页来源</strong><span>{sources.length}</span></header>
+    <div>{sources.map((source, index) => <a href={source.url} target="_blank" rel="noreferrer" key={source.url}>
+      <em>{index + 1}</em><span><strong>{source.title}</strong><small>{new URL(source.url).hostname} · 抓取 {sourceTime(source.fetchedAt)}</small>{source.snippet && <p>{source.snippet}</p>}</span><ExternalLink size={13} />
+    </a>)}</div>
+  </section>;
+}
+
+function toolStatus(item: ThreadItem) {
+  if (item.status === "completed") return { label: "完成", icon: <CheckCircle2 size={14} /> };
+  if (["failed", "declined"].includes(item.status ?? "")) return { label: item.status === "declined" ? "已拒绝" : "失败", icon: <AlertTriangle size={14} /> };
+  return { label: "执行中", icon: <LoaderCircle size={14} /> };
+}
+
 function ToolItem({ item }: { item: ThreadItem }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(item.status === "inProgress");
+  const previousStatus = useRef(item.status);
   const isCommand = item.type === "commandExecution";
   const isFile = item.type === "fileChange";
-  const Icon = isCommand ? TerminalSquare : isFile ? FileCode2 : Wrench;
-  const title = isCommand ? item.command : isFile ? `${item.changes?.length ?? 0} 个文件变更` : `${item.server ?? "工具"} · ${item.tool ?? item.type}`;
-  const detail = isCommand ? item.aggregatedOutput : JSON.stringify(item.result ?? item.arguments ?? item.error ?? {}, null, 2);
+  const isSearch = item.type === "webSearch";
+  const Icon = isCommand ? TerminalSquare : isFile ? FileCode2 : isSearch ? Search : Wrench;
+  const kind = isCommand ? "命令" : isFile ? "文件" : isSearch ? "搜索" : item.type === "contextCompaction" ? "上下文" : "工具";
+  const title = isCommand
+    ? compactText(item.command) || "正在执行命令"
+    : isFile
+      ? `${item.changes?.length ?? 0} 个文件变更`
+      : item.type === "contextCompaction"
+        ? "整理会话上下文"
+        : isSearch
+          ? compactText(item.action?.query || item.action?.queries?.join(" · ") || item.query) || "网页搜索"
+          : `${item.server ? `${item.server} · ` : ""}${item.tool ?? item.type}`;
+  const detail = isCommand
+    ? item.aggregatedOutput
+    : item.progress || JSON.stringify(item.result ?? item.arguments ?? item.error ?? {}, null, 2);
+  const status = toolStatus(item);
+
+  useEffect(() => {
+    if (item.status === "inProgress" && (item.aggregatedOutput || item.progress)) setOpen(true);
+    else if (previousStatus.current === "inProgress" && item.status !== "inProgress") setOpen(false);
+    previousStatus.current = item.status;
+  }, [item.aggregatedOutput, item.progress, item.status]);
+
   return (
-    <article className="tool-item">
+    <article className={`tool-item ${item.status ?? "inProgress"}`}>
       <button className="tool-summary" onClick={() => setOpen(!open)}>
         <Icon size={16} />
+        <b>{kind}</b>
         <span>{title || "正在执行工具"}</span>
-        <em className={`status-dot ${item.status ?? "inProgress"}`}>{item.status === "completed" ? <CheckCircle2 size={14} /> : <LoaderCircle size={14} />}</em>
+        <em className={`status-dot ${item.status ?? "inProgress"}`}>{status.icon}<i>{status.label}</i></em>
         {Number.isFinite(item.durationMs) && <small className="tool-duration"><Clock3 size={11} />{durationText(Number(item.durationMs))}</small>}
         {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
       </button>
       {open && (isFile
         ? <div className="tool-detail file-change-detail">{item.changes?.map((change, index) => <section key={`${change.path}-${index}`}><header><strong>{changeKindName(change.kind)}</strong><span>{change.path}</span></header><DiffView value={change.diff || "暂无 Diff 内容"} /></section>)}</div>
-        : <pre className="tool-detail">{detail || "暂无输出"}</pre>)}
+        : isSearch && webSearchSources(item).length > 0
+          ? <div className="tool-detail web-search-detail"><WebSources sources={webSearchSources(item)} compact /></div>
+          : <pre className="tool-detail">{detail || (item.status === "inProgress" ? "正在等待输出…" : "暂无输出")}</pre>)}
     </article>
   );
+}
+
+function ReasoningItem({ item, active }: { item: ThreadItem; active: boolean }) {
+  const [open, setOpen] = useState(active);
+  const previousActive = useRef(active);
+  const sections = item.summary?.filter((text) => text.trim()) ?? [];
+  const characterCount = sections.reduce((total, text) => total + text.length, 0);
+
+  useEffect(() => {
+    if (active) setOpen(true);
+    else if (previousActive.current) setOpen(false);
+    previousActive.current = active;
+  }, [active]);
+
+  return <section className={`reasoning-card ${active ? "active" : "history"}`}>
+    <button onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+      <span className="reasoning-icon"><BrainCircuit size={15} /></span>
+      <span><strong>{active ? "正在思考" : "思考过程"}</strong><small>{sections.length > 1 ? `${sections.length} 段 · ` : ""}{characterCount.toLocaleString()} 字</small></span>
+      {active && <em><LoaderCircle size={12} />生成中</em>}
+      {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+    </button>
+    {open && <div className="reasoning-content">{sections.map((text, index) => <p key={`${item.id}-${index}`}>{text}</p>)}</div>}
+  </section>;
 }
 
 async function copyText(value: string) {
@@ -80,6 +211,7 @@ type Props = {
   streamingItemId?: string | null;
   turnRunning?: boolean;
   activeTurnStartedAtMs?: number | null;
+  lastTurnActivityAtMs?: number | null;
   retryProviders: RetryProviderOption[];
   retryProviderId: string;
   projectPath: string;
@@ -116,7 +248,7 @@ function itemDurationMs(item: ThreadItem) {
   return null;
 }
 
-export function Timeline({ items, streamingItemId, turnRunning, activeTurnStartedAtMs, retryProviders, retryProviderId, projectPath, onOpenFile, onSuggestion, onResend, onRegenerate, onEditBranch, readOnly = false }: Props) {
+export function Timeline({ items, streamingItemId, turnRunning, activeTurnStartedAtMs, lastTurnActivityAtMs, retryProviders, retryProviderId, projectPath, onOpenFile, onSuggestion, onResend, onRegenerate, onEditBranch, readOnly = false }: Props) {
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [visibleLimit, setVisibleLimit] = useState(140);
@@ -126,13 +258,37 @@ export function Timeline({ items, streamingItemId, turnRunning, activeTurnStarte
   const renderableItems = useMemo(() => items.filter((item) => !["collabToolCall", "subAgentActivity"].includes(item.type) && (item.type !== "reasoning" || item.summary?.some((text) => text.trim()))), [items]);
   const hiddenCount = Math.max(0, renderableItems.length - visibleLimit);
   const visibleItems = hiddenCount > 0 ? renderableItems.slice(hiddenCount) : renderableItems;
+  const latestNonUserItem = [...visibleItems].reverse().find((item) => item.type !== "userMessage" && item.type !== "turnError");
+  const recentActivityItem = turnRunning && latestNonUserItem && (latestNonUserItem.type === "reasoning" || latestNonUserItem.status === "inProgress" || latestNonUserItem.id === streamingItemId)
+    ? latestNonUserItem
+    : null;
+  const activeReasoningId = turnRunning && recentActivityItem?.type === "reasoning" ? recentActivityItem.id : null;
+  const historyMessages = renderableItems.filter((item) => item.type === "userMessage" || item.type === "agentMessage").length;
+  const historySteps = renderableItems.filter((item) => ["commandExecution", "fileChange", "mcpToolCall", "webSearch", "dynamicToolCall", "contextCompaction"].includes(item.type)).length;
+  const silenceMs = turnRunning && lastTurnActivityAtMs ? Math.max(0, nowMs - lastTurnActivityAtMs) : 0;
+  const activityTitle = recentActivityItem?.type === "commandExecution"
+    ? "正在执行命令"
+    : recentActivityItem?.type === "fileChange"
+      ? "正在整理文件修改"
+      : recentActivityItem?.type === "mcpToolCall" || recentActivityItem?.type === "dynamicToolCall"
+        ? "正在调用工具"
+        : recentActivityItem?.type === "reasoning"
+          ? "模型正在思考"
+          : streamingItemId
+            ? "正在生成回复"
+            : "等待模型继续响应";
+  const activityDetail = silenceMs >= 90_000
+    ? `已有 ${durationText(silenceMs)}没有新事件，上游请求仍在等待；需要时可停止后重试。`
+    : silenceMs >= 30_000
+      ? "暂时没有新事件，但任务和连接仍处于运行状态。"
+      : "连接正常，新的推理、命令和工具进度会继续显示在这里。";
 
   useEffect(() => {
-    if (!turnRunning || !activeTurnStartedAtMs) return;
+    if (!turnRunning) return;
     setNowMs(Date.now());
     const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [turnRunning, activeTurnStartedAtMs]);
+  }, [turnRunning]);
 
   function retryControl(item: ThreadItem, label: string, run: (item: ThreadItem, providerId: string) => void, disabled = false) {
     const open = retryItemId === item.id;
@@ -173,6 +329,7 @@ export function Timeline({ items, streamingItemId, turnRunning, activeTurnStarte
   }
   return (
     <div className="timeline">
+      {renderableItems.length > 4 && <div className="history-overview"><Clock3 size={13} /><span>会话记录</span><small>{historyMessages} 条对话{historySteps > 0 ? ` · ${historySteps} 个执行步骤` : ""}</small></div>}
       {hiddenCount > 0 && <button className="load-earlier" onClick={() => setVisibleLimit((value) => value + 120)}><RotateCcw size={14} />加载更早的 {Math.min(hiddenCount, 120)} 项</button>}
       {visibleItems.map((item, visibleIndex) => {
         if (item.type === "userMessage") {
@@ -182,14 +339,21 @@ export function Timeline({ items, streamingItemId, turnRunning, activeTurnStarte
         }
         if (item.type === "agentMessage" || item.type === "plan") {
           const duration = itemDurationMs(item);
+          const relatedSearches = items.filter((entry) => entry.type === "webSearch" && (!item.turnId || entry.turnId === item.turnId));
+          const fetchedAt = relatedSearches.find((entry) => Number.isFinite(entry.observedAt))?.observedAt
+            ?? (Number.isFinite(item.turnCompletedAt) ? Number(item.turnCompletedAt) * 1000 : null);
+          const sources = dedupeSources([
+            ...relatedSearches.flatMap(webSearchSources),
+            ...markdownSources(item.text ?? "", fetchedAt ? Number(fetchedAt) : null),
+          ]);
           return <article className="message agent-message" key={item.id}><div className="message-avatar agent"><Bot size={16} /></div><div className="message-body"><div className="message-label">Codex{duration !== null && <span className="execution-duration"><Clock3 size={11} />执行 {durationText(duration)}</span>}</div><div className="message-text markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ children, href, node: _node, ...props }) => {
             const file = workspaceFileHref(href, projectPath);
             return file
               ? <a {...props} href={href} className="workspace-file-link" onClick={(event) => { event.preventDefault(); onOpenFile(file); }} title="在项目文件中打开">{children}</a>
               : <a {...props} href={href} target="_blank" rel="noreferrer">{children}</a>;
-          } }}>{item.text ?? ""}</ReactMarkdown>{streamingItemId === item.id && <span className="stream-caret" />}</div>{!readOnly && streamingItemId !== item.id && <div className="message-actions"><button onClick={() => void copyItem(item, item.text ?? "")}>{copiedId === item.id ? <Check size={13} /> : <Copy size={13} />}{copiedId === item.id ? "已复制" : "复制"}</button>{retryControl(item, "重新生成", onRegenerate, !item.turnId || Boolean(turnRunning))}</div>}</div></article>;
+          } }}>{item.text ?? ""}</ReactMarkdown>{streamingItemId === item.id && <span className="stream-caret" />}</div><WebSources sources={sources} />{!readOnly && streamingItemId !== item.id && <div className="message-actions"><button onClick={() => void copyItem(item, item.text ?? "")}>{copiedId === item.id ? <Check size={13} /> : <Copy size={13} />}{copiedId === item.id ? "已复制" : "复制"}</button>{retryControl(item, "重新生成", onRegenerate, !item.turnId || Boolean(turnRunning))}</div>}</div></article>;
         }
-        if (["commandExecution", "fileChange", "mcpToolCall", "webSearch"].includes(item.type)) {
+        if (["commandExecution", "fileChange", "mcpToolCall", "webSearch", "dynamicToolCall", "contextCompaction"].includes(item.type)) {
           return <ToolItem item={item} key={item.id} />;
         }
         if (item.type === "turnError") {
@@ -198,12 +362,11 @@ export function Timeline({ items, streamingItemId, turnRunning, activeTurnStarte
           return <article className={`turn-error-card ${item.retrying ? "retrying" : ""}`} key={item.id}><AlertTriangle size={18} /><div><strong>{item.retrying ? "模型请求暂时失败，正在自动重试" : "这次没有得到模型回复"}{duration !== null && <span className="execution-duration"><Clock3 size={11} />执行 {durationText(duration)}</span>}</strong><p>{item.text || "未知错误"}</p><div><button onClick={() => void copyItem(item, item.text ?? "")}>{copiedId === item.id ? <Check size={13} /> : <Copy size={13} />}{copiedId === item.id ? "已复制" : "复制错误"}</button>{previousUser && retryControl(item, "重试", (_item, providerId) => item.turnId ? onRegenerate(item, providerId) : onResend(previousUser, providerId), !previousUser || Boolean(turnRunning) || Boolean(item.retrying))}</div></div></article>;
         }
         if (item.type === "reasoning") {
-          return <div className="reasoning-row summary" key={item.id}>{item.summary?.join(" ")}</div>;
+          return <ReasoningItem item={item} active={item.id === activeReasoningId} key={item.id} />;
         }
         return null;
       })}
-      {turnRunning && !streamingItemId && <div className="reasoning-row active"><LoaderCircle size={14} /> 正在处理…</div>}
-      {turnRunning && activeTurnStartedAtMs && <div className="turn-duration-live"><Clock3 size={12} />已执行 {durationText(nowMs - activeTurnStartedAtMs)}</div>}
+      {turnRunning && <div className={`activity-card ${silenceMs >= 90_000 ? "quiet" : ""}`}><span><Activity size={16} /></span><div><strong>{activityTitle}</strong><small>{activityDetail}</small></div>{activeTurnStartedAtMs && <em><Clock3 size={11} />{durationText(nowMs - activeTurnStartedAtMs)}</em>}</div>}
       {previewImage && <div className="image-lightbox" role="dialog" aria-modal="true" aria-label="图片预览" onClick={() => setPreviewImage(null)}><button className="image-lightbox-close" onClick={() => setPreviewImage(null)} aria-label="关闭图片预览"><X size={22} /></button><img src={previewImage} alt="放大的聊天图片" onClick={(event) => event.stopPropagation()} /></div>}
     </div>
   );

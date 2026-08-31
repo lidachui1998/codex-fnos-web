@@ -179,6 +179,61 @@ export function openDatabase(path) {
       UNIQUE(notification_id, channel, event_type)
     );
 
+    CREATE TABLE IF NOT EXISTS project_knowledge (
+      project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+      directory TEXT NOT NULL DEFAULT '',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      state TEXT NOT NULL DEFAULT 'idle' CHECK (state IN ('idle', 'indexing', 'ready', 'error', 'disabled')),
+      last_indexed_at INTEGER,
+      last_scan_at INTEGER,
+      file_count INTEGER NOT NULL DEFAULT 0,
+      chunk_count INTEGER NOT NULL DEFAULT 0,
+      bytes_indexed INTEGER NOT NULL DEFAULT 0,
+      error TEXT,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS knowledge_files (
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      path TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      mtime_ms INTEGER NOT NULL,
+      content_hash TEXT NOT NULL,
+      indexed_at INTEGER NOT NULL,
+      PRIMARY KEY(project_id, path)
+    );
+
+    CREATE TABLE IF NOT EXISTS knowledge_chunks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      path TEXT NOT NULL,
+      chunk_index INTEGER NOT NULL,
+      start_line INTEGER NOT NULL,
+      end_line INTEGER NOT NULL,
+      content TEXT NOT NULL,
+      search_text TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      UNIQUE(project_id, path, chunk_index)
+    );
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_chunks_fts USING fts5(
+      path,
+      content,
+      search_text,
+      tokenize = 'unicode61 remove_diacritics 2'
+    );
+
+    CREATE TABLE IF NOT EXISTS file_versions (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      path TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      content TEXT NOT NULL,
+      source TEXT NOT NULL CHECK (source IN ('observed', 'index', 'canvas', 'rollback')),
+      bytes INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS scheduled_tasks_due_idx ON scheduled_tasks(enabled, next_run_at);
     CREATE INDEX IF NOT EXISTS queued_messages_account_thread_idx ON queued_messages(account_id, thread_id, created_at);
     CREATE INDEX IF NOT EXISTS scheduled_runs_task_idx ON scheduled_runs(task_id, started_at DESC);
@@ -186,6 +241,9 @@ export function openDatabase(path) {
     CREATE INDEX IF NOT EXISTS notifications_status_idx ON notifications(status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS notifications_unread_idx ON notifications(is_read, updated_at DESC);
     CREATE INDEX IF NOT EXISTS codex_accounts_used_idx ON codex_accounts(last_used_at DESC);
+    CREATE INDEX IF NOT EXISTS knowledge_files_project_idx ON knowledge_files(project_id, indexed_at DESC);
+    CREATE INDEX IF NOT EXISTS knowledge_chunks_project_path_idx ON knowledge_chunks(project_id, path, chunk_index);
+    CREATE INDEX IF NOT EXISTS file_versions_project_path_idx ON file_versions(project_id, path, created_at DESC);
   `);
 
   const timestamp = Math.floor(Date.now() / 1000);

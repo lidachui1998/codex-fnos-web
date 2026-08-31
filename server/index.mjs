@@ -25,6 +25,7 @@ import { readJson, sendError, sendJson, serveStatic } from "./lib/http.mjs";
 import { createInternalToken, isInternalAuthorized, loadOrCreateMasterKey } from "./lib/security.mjs";
 import { handleProviderGateway } from "./provider-gateway.mjs";
 import { NotificationService } from "./notification-service.mjs";
+import { KnowledgeService } from "./knowledge-service.mjs";
 import { OutboxService } from "./outbox-service.mjs";
 import { SseHub } from "./sse-hub.mjs";
 import { ScheduleService } from "./schedule-service.mjs";
@@ -67,6 +68,12 @@ const updater = new CodexUpdater({
   registryUrl: process.env.CODEX_UPDATE_REGISTRY,
 });
 const hub = new SseHub();
+const knowledge = new KnowledgeService({
+  db,
+  workspace,
+  onChanged: ({ projectId, status }) => hub.broadcast({ kind: "knowledge_changed", projectId, status, at: Date.now() }),
+});
+knowledge.start(stores.listProjects());
 const gatewayToken = createInternalToken();
 const baseCodexHome = resolve(process.env.CODEX_HOME || join(dataDir, "codex-home"));
 const accountsRoot = resolve(dataDir, "codex-accounts");
@@ -159,7 +166,7 @@ function queueBridgeRestart() {
   restartTimer = setTimeout(restartWhenIdle, 400);
 }
 
-const handleApi = createApiHandler({ stores, bridge, accounts, queueBridgeRestart, appearance, updater, workspace, skills, extensions, schedules, notifications, subagentJoins, outbox });
+const handleApi = createApiHandler({ stores, bridge, accounts, queueBridgeRestart, appearance, updater, workspace, knowledge, skills, extensions, schedules, notifications, subagentJoins, outbox });
 const loginFailures = new Map();
 const loginWindowMs = 5 * 60 * 1000;
 const maxLoginFailures = 5;
@@ -305,6 +312,7 @@ async function shutdown() {
   subagentJoins.close();
   schedules.close();
   notifications.close();
+  knowledge.close();
   accounts.close();
   hub.close();
   await bridge.stop();

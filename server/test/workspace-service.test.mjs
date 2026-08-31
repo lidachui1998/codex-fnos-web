@@ -57,6 +57,10 @@ test("workspace files stay inside the project and text files can be read", () =>
       mimeType: "image/png",
       dataUrl: "data:image/png;base64,",
     });
+    const saved = service.write({ path: projectPath }, "src/index.js", "export const ready = false;\n");
+    assert.equal(saved.content, "export const ready = false;\n");
+    assert.equal(service.read({ path: projectPath }, "src/index.js").content, "export const ready = false;\n");
+    assert.throws(() => service.write({ path: projectPath }, "src/pixel.png", "no"), /二进制文件/);
     assert.throws(() => service.read({ path: projectPath }, "../outside.txt"), /超出项目目录|ENOENT/);
     assert.throws(() => service.download({ path: projectPath }, "../outside.txt"), /超出项目目录|ENOENT/);
   } finally {
@@ -73,13 +77,10 @@ test("workspace artifacts are sorted and expose safe inline view metadata", () =
   const service = new WorkspaceService();
   try {
     const artifacts = service.artifacts({ path: projectPath });
-    assert.deepEqual(artifacts.data.map(({ modifiedAt: _modifiedAt, ...item }) => item), [{
-      name: "report.html",
-      path: "output/report.html",
-      size: 36,
-      kind: "html",
-      mimeType: "text/html; charset=utf-8",
-    }]);
+    assert.deepEqual(artifacts.data.map(({ modifiedAt: _modifiedAt, ...item }) => item).sort((left, right) => left.name.localeCompare(right.name)), [
+      { name: "notes.txt", path: "output/notes.txt", size: 15, kind: "document", mimeType: "text/plain; charset=utf-8" },
+      { name: "report.html", path: "output/report.html", size: 36, kind: "html", mimeType: "text/html; charset=utf-8" },
+    ]);
     assert.equal(artifacts.truncated, false);
     assert.deepEqual(service.view({ path: projectPath }, "output/report.html"), {
       path: "output/report.html",

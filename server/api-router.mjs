@@ -145,7 +145,7 @@ function publicCodexStatus(value) {
   return result;
 }
 
-export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart, appearance, updater, workspace, skills, extensions, schedules, notifications, subagentJoins = null, outbox = null }) {
+export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart, appearance, updater, workspace, knowledge, skills, extensions, schedules, notifications, subagentJoins = null, outbox = null }) {
   const findProject = (id) => stores.listProjects().find((item) => item.id === id);
   const findProvider = (id) => stores.listProviders().find((item) => item.id === id);
   const decorateThread = (thread, extra = {}) => {
@@ -195,7 +195,7 @@ export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart,
         }
       }
       sendJson(res, 200, {
-        version: "0.9.13",
+        version: "0.10.0",
         providers: stores.listProviders(),
         proxies: stores.listProxies(),
         projects: stores.listProjects(),
@@ -593,18 +593,53 @@ export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart,
       return;
     }
     if (req.method === "POST" && pathname === "/api/projects") {
-      sendJson(res, 201, { project: stores.saveProject(await readJson(req)) });
+      const project = stores.saveProject(await readJson(req));
+      knowledge.syncProjects([project]);
+      sendJson(res, 201, { project });
       return;
     }
     params = route(req.method, pathname, { method: "PATCH", path: /^\/api\/projects\/(?<id>[^/]+)$/ });
     if (params) {
-      sendJson(res, 200, { project: stores.saveProject(await readJson(req), params.id) });
+      const project = stores.saveProject(await readJson(req), params.id);
+      knowledge.syncProjects([project]);
+      sendJson(res, 200, { project });
       return;
     }
     params = route(req.method, pathname, { method: "DELETE", path: /^\/api\/projects\/(?<id>[^/]+)$/ });
     if (params) {
+      knowledge.removeProject(params.id);
       const deleted = stores.deleteProject(params.id);
       sendJson(res, deleted ? 200 : 404, { deleted });
+      return;
+    }
+
+    params = route(req.method, pathname, { method: "GET", path: /^\/api\/projects\/(?<id>[^/]+)\/knowledge$/ });
+    if (params) {
+      const project = findProject(params.id);
+      if (!project) return sendError(res, 404, "项目不存在");
+      knowledge.schedule(project, 50);
+      sendJson(res, 200, knowledge.status(project));
+      return;
+    }
+    params = route(req.method, pathname, { method: "PUT", path: /^\/api\/projects\/(?<id>[^/]+)\/knowledge$/ });
+    if (params) {
+      const project = findProject(params.id);
+      if (!project) return sendError(res, 404, "项目不存在");
+      sendJson(res, 200, await knowledge.configure(project, await readJson(req)));
+      return;
+    }
+    params = route(req.method, pathname, { method: "POST", path: /^\/api\/projects\/(?<id>[^/]+)\/knowledge\/reindex$/ });
+    if (params) {
+      const project = findProject(params.id);
+      if (!project) return sendError(res, 404, "项目不存在");
+      sendJson(res, 200, await knowledge.refresh(project, { force: true }));
+      return;
+    }
+    params = route(req.method, pathname, { method: "GET", path: /^\/api\/projects\/(?<id>[^/]+)\/knowledge\/search$/ });
+    if (params) {
+      const project = findProject(params.id);
+      if (!project) return sendError(res, 404, "项目不存在");
+      sendJson(res, 200, await knowledge.search(project, searchParams.get("query") || "", searchParams.get("limit") || 10));
       return;
     }
 
@@ -633,7 +668,39 @@ export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart,
     if (params) {
       const project = findProject(params.id);
       if (!project) return sendError(res, 404, "项目不存在");
-      sendJson(res, 200, workspace.read(project, searchParams.get("path") || ""));
+      const file = workspace.read(project, searchParams.get("path") || "");
+      if (file.kind === "text") knowledge.observeFile(project, file.path, file.content);
+      sendJson(res, 200, file);
+      return;
+    }
+    params = route(req.method, pathname, { method: "PUT", path: /^\/api\/projects\/(?<id>[^/]+)\/file$/ });
+    if (params) {
+      const project = findProject(params.id);
+      if (!project) return sendError(res, 404, "项目不存在");
+      const input = await readJson(req, 2 * 1024 * 1024);
+      sendJson(res, 200, knowledge.saveFile(project, input.path, input.content));
+      return;
+    }
+    params = route(req.method, pathname, { method: "GET", path: /^\/api\/projects\/(?<id>[^/]+)\/file\/versions$/ });
+    if (params) {
+      const project = findProject(params.id);
+      if (!project) return sendError(res, 404, "项目不存在");
+      sendJson(res, 200, { data: knowledge.versions(project, searchParams.get("path") || "") });
+      return;
+    }
+    params = route(req.method, pathname, { method: "GET", path: /^\/api\/projects\/(?<id>[^/]+)\/file\/version$/ });
+    if (params) {
+      const project = findProject(params.id);
+      if (!project) return sendError(res, 404, "项目不存在");
+      sendJson(res, 200, knowledge.version(project, searchParams.get("path") || "", searchParams.get("versionId") || ""));
+      return;
+    }
+    params = route(req.method, pathname, { method: "POST", path: /^\/api\/projects\/(?<id>[^/]+)\/file\/rollback$/ });
+    if (params) {
+      const project = findProject(params.id);
+      if (!project) return sendError(res, 404, "项目不存在");
+      const input = await readJson(req);
+      sendJson(res, 200, knowledge.rollback(project, input.path, input.versionId));
       return;
     }
     params = route(req.method, pathname, { method: "GET", path: /^\/api\/projects\/(?<id>[^/]+)\/file\/download$/ });

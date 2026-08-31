@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, extname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -10,6 +10,7 @@ const maxImageFileBytes = 12 * 1024 * 1024;
 const hiddenDirectories = new Set([".git", ".codex-system", ".fnos-build", "node_modules", ".pnpm-store"]);
 const artifactExtensions = new Map([
   [".html", ["html", "text/html; charset=utf-8"]], [".htm", ["html", "text/html; charset=utf-8"]],
+  [".md", ["document", "text/markdown; charset=utf-8"]], [".markdown", ["document", "text/markdown; charset=utf-8"]], [".txt", ["document", "text/plain; charset=utf-8"]],
   [".pdf", ["document", "application/pdf"]], [".docx", ["document", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]],
   [".xlsx", ["document", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]], [".pptx", ["document", "application/vnd.openxmlformats-officedocument.presentationml.presentation"]],
   [".png", ["image", "image/png"]], [".jpg", ["image", "image/jpeg"]], [".jpeg", ["image", "image/jpeg"]], [".webp", ["image", "image/webp"]], [".gif", ["image", "image/gif"]], [".svg", ["image", "image/svg+xml"]],
@@ -228,6 +229,25 @@ export class WorkspaceService {
       kind: "text",
       mimeType: "text/plain",
       content: content.toString("utf8"),
+    };
+  }
+
+  write(project, value, nextContent) {
+    const { root, target } = resolveExistingProjectPath(project, value);
+    const stats = statSync(target);
+    if (!stats.isFile()) throw Object.assign(new Error("目标不是文件"), { status: 400 });
+    if (stats.size > maxTextFileBytes) throw Object.assign(new Error("文本文件超过 1.5 MB，不能在画布中编辑"), { status: 413 });
+    const current = readFileSync(target);
+    if (current.subarray(0, 8192).includes(0)) throw Object.assign(new Error("二进制文件不能在画布中编辑"), { status: 415 });
+    const content = String(nextContent ?? "");
+    if (Buffer.byteLength(content) > maxTextFileBytes) throw Object.assign(new Error("编辑后的文件超过 1.5 MB"), { status: 413 });
+    writeFileSync(target, content, "utf8");
+    return {
+      path: relativePath(root, target),
+      size: Buffer.byteLength(content),
+      kind: "text",
+      mimeType: "text/plain",
+      content,
     };
   }
 

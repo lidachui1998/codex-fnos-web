@@ -151,7 +151,7 @@ export class AppServerBridge extends EventEmitter {
         this.#consumeOutput(child);
         try {
           await this.request("initialize", {
-            clientInfo: { name: "codex-fnos-web", title: "Codex fnOS Web", version: "0.9.13" },
+            clientInfo: { name: "codex-fnos-web", title: "Codex fnOS Web", version: "0.10.0" },
             capabilities: { experimentalApi: true },
           }, { requireReady: false });
           this.notify("initialized", {});
@@ -322,6 +322,9 @@ export class AppServerBridge extends EventEmitter {
       "startup_timeout_sec = 10",
       "",
       "[mcp_servers.fnos_schedule.tools.create_scheduled_task]",
+      "approval_mode = \"approve\"",
+      "",
+      "[mcp_servers.fnos_schedule.tools.search_project_knowledge]",
       "approval_mode = \"approve\"",
       "",
       "[mcp_servers.fnos_schedule.tools.create_new_conversation]",
