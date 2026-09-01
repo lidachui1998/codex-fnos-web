@@ -5,7 +5,7 @@
   <p>原生飞牛桌面体验 · 实时对话控制 · 后台定时任务 · Codex 宠物 · Skills 与插件 · 多模型供应商</p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-0.11.0-0f9f7f?style=flat-square" alt="Version 0.11.0">
+    <img src="https://img.shields.io/badge/version-0.11.1-0f9f7f?style=flat-square" alt="Version 0.11.1">
     <img src="https://img.shields.io/badge/fnOS-x86__64-1f2937?style=flat-square" alt="fnOS x86_64">
     <img src="https://img.shields.io/badge/Node.js-24%2B-3c873a?style=flat-square" alt="Node.js 24+">
     <img src="https://img.shields.io/badge/tests-104%20passed-0f9f7f?style=flat-square" alt="104 tests passed">
@@ -40,7 +40,7 @@ Codex 飞牛工作台把这些环节放进同一个 fnOS 应用：
 
 ## 核心能力
 
-| 能力 | 0.11.0 中的实现 |
+| 能力 | 0.11.1 中的实现 |
 | --- | --- |
 | 实时对话控制 | 流式回答、中断、官方 `turn/steer` 立即追加；等待队列持久化在 NAS，关闭页面后仍会自动续发，也可手动提前发送 |
 | 飞牛 App 兼容 | 标准 SSE 实时通道；嵌入式 WebView 自动降级为 Fetch 长轮询，断网、回前台与服务重启后自动重连并同步当前会话 |
@@ -50,7 +50,7 @@ Codex 飞牛工作台把这些环节放进同一个 fnOS 应用：
 | fnOS 后台自动化 | 每隔一段时间、每天或每周执行；任务可独立选择供应商、模型和思考强度；Codex 可在用户要求下创建、查看、编辑、暂停、恢复或删除任务 |
 | 项目知识库 | 可选择项目内 NAS 目录建立本地增量索引；支持中文与代码标识符的跨文件检索，结果返回文件、精确行号、片段与匹配度；Codex 可通过只读 MCP 工具引用这些来源 |
 | 产物编辑画布 | Markdown、HTML、代码与文本产物可直接编辑；自动保存最多 40 个本地版本，支持历史对比、回滚以及回到会话让 Codex 继续修改 |
-| NAS 文件工作流 | 项目文件、Git diff 与常见产物预览；调用官方 `openFile` / `openFileManager` 打开或定位文件 |
+| NAS 文件工作流 | 项目文件、Git diff 与常见产物预览；调用官方 `openFile` / `openFileManager` 打开或定位文件，宿主失联和超时会给出可操作诊断 |
 | 网页检索溯源 | `webSearch` 展示搜索词、来源标题、网址、抓取时间与引用片段；回答中的来源卡片和 Markdown 引用可直接打开原网页 |
 | Skills 与插件 | 搜索、预览、智能调用、`@` 强制指定；支持 GitHub、`SKILL.md`、ZIP 与标准插件包导入 |
 | 模型与账号 | OpenAI / ChatGPT 设备码或 API Key 登录，多账号隔离；第三方 Responses 与 Chat Completions 自动适配 |
@@ -95,7 +95,7 @@ Skills 可以允许 Codex 智能调用，也可以在聊天框中通过 `@` 明�
 
 ## 桌面与移动端
 
-桌面端使用项目栏、会话栏和工作区三栏布局；移动端改为抽屉与紧凑工具栏，保留消息操作、附件、Skills 和会话跳转。
+桌面端使用项目栏、会话栏和工作区三栏布局；移动端使用抽屉和带文字的双列操作面板，模型选择采用独立底部抽屉，不会再被顶部工具栏遮挡。
 
 <p align="center">
   <img src="assets/readme/mobile.png" width="390" alt="Codex 飞牛工作台移动端界面">
@@ -111,7 +111,7 @@ Skills 可以允许 Codex 智能调用，也可以在聊天框中通过 `@` 明�
 
 ### 安装 FPK
 
-1. 从 [最新 Release](https://github.com/lidachui1998/codex-fnos-web/releases/latest) 下载 `com.lidachui.codexweb-0.11.0-x86_64.fpk`。
+1. 从 [最新 Release](https://github.com/lidachui1998/codex-fnos-web/releases/latest) 下载 `com.lidachui.codexweb-0.11.1-x86_64.fpk`。
 2. 在 fnOS 应用中心选择手动安装，并上传 FPK。
 3. 打开“Codex 飞牛工作台”，首次使用时设置工作台访问密码。
 4. 登录 OpenAI / ChatGPT，或在设置中添加第三方模型供应商。
@@ -120,7 +120,7 @@ Skills 可以允许 Codex 智能调用，也可以在聊天框中通过 `@` 明�
 安装包 SHA-256：
 
 ```text
-2FCEA25217AC0E812AAA2406F53050B939B619133BB3E910398CA5D8DCA3879F
+C2F4AF3A8208C26601F4483DA62A16E9740ECE5CA75A06B95F6DF707C3B4DE37
 ```
 
 > [!TIP]

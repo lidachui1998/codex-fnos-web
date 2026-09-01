@@ -129,7 +129,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .provider-pill strong { color: var(--ink); font-size: 9.5px; line-height: 1.1; }
 .provider-pill small { margin-top: 2px; color: var(--muted); font-size: 8px; line-height: 1; }
 .model-picker-scrim { position: fixed; z-index: 58; inset: 0; border: 0; background: transparent; }
-.model-picker { position: absolute; z-index: 60; top: 42px; right: 0; width: min(390px, calc(100vw - 24px)); max-height: min(680px, calc(100dvh - 74px)); overflow: hidden; border: 1px solid var(--line); border-radius: 15px; background: var(--paper); box-shadow: 0 20px 48px rgba(0,0,0,.16); }
+.model-picker { position: fixed; z-index: 60; top: 54px; right: 12px; width: min(390px, calc(100vw - 24px)); max-height: min(680px, calc(100dvh - 74px)); overflow: hidden; border: 1px solid var(--line); border-radius: 15px; background: var(--paper); box-shadow: 0 20px 48px rgba(0,0,0,.16); }
 .model-picker > header { min-height: 61px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 11px 11px 15px; border-bottom: 1px solid var(--line); }
 .model-picker > header > div { display: flex; align-items: center; gap: 9px; }
 .model-picker > header > div > svg { color: var(--accent-dark); }
@@ -1401,4 +1401,62 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .pet-preferences input[type="range"] { flex: 1; width: auto; }
   .pet-grid { grid-template-columns: 1fr; }
   .pet-companion { z-index: 32; }
+}
+
+/* Mobile controls are an action sheet. The model dialog is portaled to body so
+   it cannot be clipped or covered by the header tools menu. */
+@media (max-width: 860px) {
+  .conversation-tools {
+    top: calc(62px + env(safe-area-inset-top));
+    right: 8px;
+    width: min(360px,calc(100vw - 16px));
+    max-height: calc(100dvh - 78px - env(safe-area-inset-top));
+    grid-template-columns: repeat(2,minmax(0,1fr));
+    gap: 8px;
+    padding: 11px;
+    overflow-y: auto;
+    border-radius: 18px;
+    box-shadow: 0 22px 55px rgba(20,25,23,.24);
+  }
+  .conversation-tools .approval-policy-picker, .conversation-tools .model-picker-wrap { grid-column: 1 / -1; }
+  .conversation-tools .approval-policy-picker, .conversation-tools .provider-pill { min-height: 46px; padding-inline: 12px; }
+  .conversation-tools .provider-pill strong { font-size: 10.5px; }
+  .conversation-tools .provider-pill small { margin-top: 3px; font-size: 8.5px; }
+  .conversation-tools .network-access-toggle, .conversation-tools .transport-status-button { min-height: 44px; justify-content: center; }
+  .conversation-tools.mobile-open > .icon-button[data-mobile-label] {
+    min-height: 54px;
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 5px;
+    border-radius: 11px;
+  }
+  .conversation-tools > .icon-button[data-mobile-label]::after { content: attr(data-mobile-label); color: var(--muted); font-size: 8px; font-weight: 700; line-height: 1; }
+  .conversation-tools > .icon-button[data-mobile-label].active-tool::after { color: var(--accent-dark); }
+  .mobile-tools-scrim { z-index: 19; background: rgba(15,19,17,.24); backdrop-filter: blur(3px); }
+
+  .model-picker-scrim { z-index: 118; background: rgba(15,19,17,.34); backdrop-filter: blur(4px); }
+  .model-picker {
+    z-index: 120;
+    inset: auto 0 0;
+    width: 100%;
+    max-height: min(88dvh,720px);
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 22px 22px 0 0;
+    box-shadow: 0 -18px 52px rgba(15,19,17,.24);
+  }
+  .model-picker > header { min-height: 66px; padding: 13px 14px 11px 18px; }
+  .model-picker > header strong { font-size: 14px; }
+  .model-picker > header small { font-size: 9px; }
+  .model-picker-body { max-height: calc(min(88dvh,720px) - 66px); gap: 13px; padding: 15px 14px max(18px,env(safe-area-inset-bottom)); overscroll-behavior: contain; }
+  .model-picker-body label > span { font-size: 10.5px; }
+  .model-picker-body input, .model-picker-body select { height: 44px; font-size: 16px; }
+  .model-combobox-control > button { width: 42px; height: 42px; }
+  .model-combobox-list { position: relative; top: auto; margin-top: 6px; max-height: min(34dvh,260px); box-shadow: none; }
+  .model-combobox-list > button { min-height: 44px; }
+  .quick-models button, .refresh-models, .advanced-settings { min-height: 40px; font-size: 9px; }
+  .apply-model { min-height: 44px; }
 }

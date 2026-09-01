@@ -1931,20 +1931,20 @@ export default function App() {
               model={selectedModel}
               effort={selectedEffort}
               threadProviderId={selectedThread ? threadProviderId(selectedThread) : null}
-              onOpenChange={setModelPickerOpen}
+              onOpenChange={(nextOpen) => { setModelPickerOpen(nextOpen); if (nextOpen) setMobileToolsOpen(false); }}
               onSelect={selectModel}
               onChanged={loadBootstrap}
               onAdvancedSettings={() => setSettingsDialog(true)}
             />
-            <button className="icon-button" disabled={!selectedProject} title="Skills 管理（已启用的 Skill 可智能调用）" aria-label="Skills 管理" onClick={() => { setMobileToolsOpen(false); setSkillsDialog(true); }}><Sparkles size={17} /></button>
-            <button className="icon-button" title="插件市场与已安装插件" aria-label="插件" onClick={() => { setMobileToolsOpen(false); setPluginsDialog(true); }}><Boxes size={17} /></button>
-            <button className="icon-button" title="宠物中心" aria-label="宠物中心" onClick={() => { setMobileToolsOpen(false); setPetCenterDialog(true); }}><PawPrint size={17} /></button>
-            {resolvedSubagents.length > 0 && <button className={`icon-button notification-button ${selectedSubagentState ? "active-tool" : ""}`} title={`子代理：${runningSubagentCount} 个运行或等待中，${resolvedSubagents.length} 个总计`} aria-label="打开右侧子代理面板" onClick={() => { setMobileToolsOpen(false); setWorkspacePanel(false); setSelectedSubagent(resolvedSubagents[0]); }}><Bot size={17} />{runningSubagentCount > 0 && <span>{runningSubagentCount}</span>}</button>}
-            <button className="icon-button" title="定时任务" aria-label="定时任务" onClick={() => { setMobileToolsOpen(false); setScheduledTasksDialog(true); }}><CalendarClock size={17} /></button>
-            <button className="icon-button notification-button" title="通知中心" aria-label={`通知中心，${notificationSummary.unread} 条未读`} onClick={() => { setMobileToolsOpen(false); setNotificationDialog(true); }}><Bell size={17} />{notificationSummary.unread > 0 && <span>{notificationSummary.unread > 99 ? "99+" : notificationSummary.unread}</span>}</button>
-            <button className={`icon-button ${workspacePanel ? "active-tool" : ""}`} disabled={!selectedProject} title="项目文件和改动" aria-label="项目文件和改动" onClick={() => { setMobileToolsOpen(false); setSelectedSubagent(null); setWorkspacePanel((value) => !value); }}><Code2 size={17} /></button>
-            <button className="icon-button header-settings-button" title="设置" aria-label="设置" onClick={() => { setMobileToolsOpen(false); setSettingsDialog(true); }}><Settings size={17} /></button>
-            <button className="icon-button danger" disabled={!selectedThread || conversationBusy} title="删除当前会话" aria-label="删除当前会话" onClick={() => { setMobileToolsOpen(false); if (selectedThread) void deleteThread(selectedThread); }}><Trash2 size={17} /></button>
+            <button className="icon-button" data-mobile-label="Skills" disabled={!selectedProject} title="Skills 管理（已启用的 Skill 可智能调用）" aria-label="Skills 管理" onClick={() => { setMobileToolsOpen(false); setSkillsDialog(true); }}><Sparkles size={17} /></button>
+            <button className="icon-button" data-mobile-label="插件" title="插件市场与已安装插件" aria-label="插件" onClick={() => { setMobileToolsOpen(false); setPluginsDialog(true); }}><Boxes size={17} /></button>
+            <button className="icon-button" data-mobile-label="宠物" title="宠物中心" aria-label="宠物中心" onClick={() => { setMobileToolsOpen(false); setPetCenterDialog(true); }}><PawPrint size={17} /></button>
+            {resolvedSubagents.length > 0 && <button className={`icon-button notification-button ${selectedSubagentState ? "active-tool" : ""}`} data-mobile-label="子代理" title={`子代理：${runningSubagentCount} 个运行或等待中，${resolvedSubagents.length} 个总计`} aria-label="打开右侧子代理面板" onClick={() => { setMobileToolsOpen(false); setWorkspacePanel(false); setSelectedSubagent(resolvedSubagents[0]); }}><Bot size={17} />{runningSubagentCount > 0 && <span>{runningSubagentCount}</span>}</button>}
+            <button className="icon-button" data-mobile-label="定时任务" title="定时任务" aria-label="定时任务" onClick={() => { setMobileToolsOpen(false); setScheduledTasksDialog(true); }}><CalendarClock size={17} /></button>
+            <button className="icon-button notification-button" data-mobile-label="通知" title="通知中心" aria-label={`通知中心，${notificationSummary.unread} 条未读`} onClick={() => { setMobileToolsOpen(false); setNotificationDialog(true); }}><Bell size={17} />{notificationSummary.unread > 0 && <span>{notificationSummary.unread > 99 ? "99+" : notificationSummary.unread}</span>}</button>
+            <button className={`icon-button ${workspacePanel ? "active-tool" : ""}`} data-mobile-label="项目文件" disabled={!selectedProject} title="项目文件和改动" aria-label="项目文件和改动" onClick={() => { setMobileToolsOpen(false); setSelectedSubagent(null); setWorkspacePanel((value) => !value); }}><Code2 size={17} /></button>
+            <button className="icon-button header-settings-button" data-mobile-label="设置" title="设置" aria-label="设置" onClick={() => { setMobileToolsOpen(false); setSettingsDialog(true); }}><Settings size={17} /></button>
+            <button className="icon-button danger" data-mobile-label="删除会话" disabled={!selectedThread || conversationBusy} title="删除当前会话" aria-label="删除当前会话" onClick={() => { setMobileToolsOpen(false); if (selectedThread) void deleteThread(selectedThread); }}><Trash2 size={17} /></button>
           </div>
         </header>
 
@@ -1980,6 +1980,7 @@ export default function App() {
           </div>
           <small className="composer-note">Codex 可能会出错，请在执行重要操作前检查文件变更和命令。</small>
         </footer>
+        {mobileToolsOpen && <button className="mobile-tools-scrim" onClick={() => setMobileToolsOpen(false)} aria-label="关闭更多会话工具" />}
       </main>
 
       <PetCompanion
@@ -2005,7 +2006,6 @@ export default function App() {
       </Suspense>
 
       {(mobileProjects || mobileThreads) && <div className="mobile-scrim" onClick={() => { setMobileProjects(false); setMobileThreads(false); }} />}
-      {mobileToolsOpen && <button className="mobile-tools-scrim" onClick={() => setMobileToolsOpen(false)} aria-label="关闭更多会话工具" />}
     </div>
   );
 }

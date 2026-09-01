@@ -195,7 +195,7 @@ export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart,
         }
       }
       sendJson(res, 200, {
-        version: "0.11.0",
+        version: "0.11.1",
         providers: stores.listProviders(),
         proxies: stores.listProxies(),
         projects: stores.listProjects(),

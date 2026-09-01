@@ -82,6 +82,7 @@ export function WorkspacePanel({ project, items, requestedFile, onClose, onConti
   const [markdownSource, setMarkdownSource] = useState(false);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [fnosOpening, setFnosOpening] = useState(false);
   const [error, setError] = useState("");
   const [copiedPath, setCopiedPath] = useState(false);
   const [notice, setNotice] = useState("");
@@ -288,19 +289,25 @@ export function WorkspacePanel({ project, items, requestedFile, onClose, onConti
 
   async function openWithFnos(path: string, containingFolder = false) {
     const absolutePath = projectAbsolutePath(project, cleanFileReference(path));
+    setFnosOpening(true);
+    setError("");
+    setNotice(containingFolder ? "正在连接飞牛文件管理器…" : "正在请求飞牛打开文件…");
     try {
       if (containingFolder) {
         const folder = absolutePath.replace(/[\\/][^\\/]+$/, "") || project.path;
         await openFnosFileManager(folder);
-        setNotice("已在飞牛文件管理器中定位");
+        setNotice("打开请求已发送到飞牛文件管理器");
       } else {
         await openFnosFile(absolutePath);
-        setNotice("已交给飞牛文件管理器打开");
+        setNotice("文件打开请求已发送给飞牛");
       }
     } catch (reason) {
+      setNotice("");
       setError(reason instanceof Error ? reason.message : "无法调用飞牛文件管理器");
+    } finally {
+      setFnosOpening(false);
     }
-    window.setTimeout(() => setNotice(""), 1_800);
+    window.setTimeout(() => setNotice(""), 2_600);
   }
 
   async function copyNasPath() {
@@ -365,8 +372,8 @@ export function WorkspacePanel({ project, items, requestedFile, onClose, onConti
             {preview.fileKind === "text" && !preview.previewError && <button className="preview-icon-button" onClick={() => { onContinueWithCodex?.(relativePreviewPath()); onClose(); }} title="回到对话并让 Codex 继续修改"><Sparkles size={13} /></button>}
             <button className="preview-mode-button" onClick={downloadPreview} title="下载到当前设备"><Download size={13} /> 下载</button>
             <button className="preview-icon-button" onClick={() => openBrowserPreview(relativePreviewPath())} title="在新标签页预览"><ExternalLink size={13} /></button>
-            <button className="preview-icon-button" onClick={() => void openWithFnos(relativePreviewPath())} title="使用飞牛打开文件"><File size={13} /></button>
-            <button className="preview-icon-button" onClick={() => void openWithFnos(relativePreviewPath(), true)} title="在飞牛文件管理器中定位"><FolderOpen size={13} /></button>
+            <button className="preview-icon-button" disabled={fnosOpening} onClick={() => void openWithFnos(relativePreviewPath())} title="使用飞牛打开文件"><File size={13} /></button>
+            <button className="preview-icon-button" disabled={fnosOpening} onClick={() => void openWithFnos(relativePreviewPath(), true)} title="在飞牛文件管理器中定位"><FolderOpen size={13} /></button>
             <button className="preview-icon-button" onClick={() => void copyNasPath()} title="复制 NAS 完整路径">{copiedPath ? <Check size={13} /> : <Copy size={13} />}</button>
           </>}
           {preview.kind === "file" && preview.fileKind === "text" && isMarkdown(preview.path) && !preview.previewError && !editing && <button className="preview-mode-button" onClick={() => setMarkdownSource((value) => !value)}>{markdownSource ? <Eye size={13} /> : <Code2 size={13} />}{markdownSource ? "预览" : "源码"}</button>}

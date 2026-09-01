@@ -1,5 +1,6 @@
 import { Check, ChevronDown, KeyRound, LoaderCircle, RefreshCw, Settings2, Sparkles, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "../api";
 import { inferReasoningProfile, reasoningOptions, reasoningProfileName } from "../reasoning-profile";
 import type { Bootstrap, ReasoningEffort } from "../types";
@@ -104,6 +105,32 @@ export function ModelPicker({ bootstrap, open, providerId, model, effort, thread
     setError("");
   }
 
+  const picker = open && typeof document !== "undefined" ? createPortal(<>
+    <button className="model-picker-scrim" onClick={() => onOpenChange(false)} aria-label="关闭模型选择" />
+    <section className="model-picker" role="dialog" aria-modal="true" aria-label="选择模型和设置 API 令牌">
+      <header><div><Sparkles size={17} /><span><strong>模型与 API</strong><small>选择后立即用于下一条消息</small></span></div><button className="icon-button small" onClick={() => onOpenChange(false)} aria-label="关闭"><X size={16} /></button></header>
+      <div className="model-picker-body">
+        <label><span>供应商</span><select value={draftProviderId} onChange={(event) => changeProvider(event.target.value)}><option value="">OpenAI / ChatGPT</option>{bootstrap.providers.filter((item) => item.enabled).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <label><span>模型 ID {loading && <LoaderCircle size={12} className="spin" />}</span><ModelCombobox options={models.map((item) => ({ value: item.model, label: item.displayName }))} value={draftModel} onChange={chooseModel} placeholder="输入或下拉选择模型" /></label>
+        {quickModels.length > 0 && <div className="quick-models">{quickModels.map((item) => <button key={item.id} className={draftModel === item.model ? "active" : ""} onClick={() => chooseModel(item.model)}>{item.displayName}</button>)}</div>}
+        {effortOptions.length > 0 && <label><span>思考程度 · {reasoningProfileName(reasoningProfile)}</span><select value={draftEffort} onChange={(event) => setDraftEffort(event.target.value as ReasoningEffort | "")}><option value="">跟随模型默认</option>{effortOptions.map((item) => <option key={item.value} value={item.value}>{item.label}（{item.value}）</option>)}</select><small>{draftEffort ? effortOptions.find((item) => item.value === draftEffort)?.description : "不同供应商和模型只显示它实际支持的档位。"}</small></label>}
+        {effortOptions.length === 0 && <div className="model-note">当前模型没有可配置的思考程度，将使用供应商默认行为。</div>}
+        {draftProviderId && <button type="button" className="refresh-models" onClick={() => setRefreshKey((current) => current + 1)} disabled={loading}><RefreshCw size={13} className={loading ? "spin" : ""} /> 从供应商 /models 重新获取</button>}
+        {providerWillChange && <div className="model-note">供应商与当前会话不同：普通发送会创建新会话；在历史回复旁点“重新生成”可明确选择该供应商，并留在当前会话。</div>}
+        <button className="primary-button apply-model" disabled={!draftModel.trim() && Boolean(draftProviderId)} onClick={async () => { await onSelect(draftProviderId, draftModel.trim(), draftEffort); onOpenChange(false); }}><Check size={16} /> 使用这个模型</button>
+
+        <form className="quick-token" onSubmit={(event) => { event.preventDefault(); void saveToken(); }}>
+          <div><KeyRound size={15} /><span><strong>直接设置 API 令牌</strong><small>{provider ? `更新 ${provider.name} 的令牌` : "连接 OpenAI API Key"}</small></span></div>
+          <input className="sr-only" name="username" autoComplete="username" value={provider?.name || "OpenAI"} readOnly tabIndex={-1} aria-hidden="true" />
+          <div className="quick-token-row"><input name="apiKey" type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder={provider?.apiKeyHint || "粘贴 API Key"} autoComplete="new-password" /><button type="submit" className="secondary-button compact" disabled={!token.trim() || savingToken}>{savingToken ? "保存中" : "保存"}</button></div>
+        </form>
+        {notice && <div className="model-picker-notice">{notice}</div>}
+        {error && <div className="form-error">{error}</div>}
+        <button className="advanced-settings" onClick={() => { onOpenChange(false); onAdvancedSettings(); }}><Settings2 size={14} /> 添加第三方 API、代理或高级请求头</button>
+      </div>
+    </section>
+  </>, document.body) : null;
+
   async function saveToken() {
     const value = token.trim();
     if (!value) return;
@@ -132,31 +159,7 @@ export function ModelPicker({ bootstrap, open, providerId, model, effort, thread
       <button className="provider-pill" onClick={() => onOpenChange(!open)} aria-haspopup="dialog" aria-expanded={open}>
         <span><strong>{providerName}</strong><small>{activeModel}{activeEffort}</small></span><ChevronDown size={13} />
       </button>
-      {open && <>
-        <button className="model-picker-scrim" onClick={() => onOpenChange(false)} aria-label="关闭模型选择" />
-        <section className="model-picker" role="dialog" aria-label="选择模型和设置 API 令牌">
-          <header><div><Sparkles size={17} /><span><strong>模型与 API</strong><small>选择后立即用于下一条消息</small></span></div><button className="icon-button small" onClick={() => onOpenChange(false)} aria-label="关闭"><X size={16} /></button></header>
-          <div className="model-picker-body">
-            <label><span>供应商</span><select value={draftProviderId} onChange={(event) => changeProvider(event.target.value)}><option value="">OpenAI / ChatGPT</option>{bootstrap.providers.filter((item) => item.enabled).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-            <label><span>模型 ID {loading && <LoaderCircle size={12} className="spin" />}</span><ModelCombobox options={models.map((item) => ({ value: item.model, label: item.displayName }))} value={draftModel} onChange={chooseModel} placeholder="输入或下拉选择模型" /></label>
-            {quickModels.length > 0 && <div className="quick-models">{quickModels.map((item) => <button key={item.id} className={draftModel === item.model ? "active" : ""} onClick={() => chooseModel(item.model)}>{item.displayName}</button>)}</div>}
-            {effortOptions.length > 0 && <label><span>思考程度 · {reasoningProfileName(reasoningProfile)}</span><select value={draftEffort} onChange={(event) => setDraftEffort(event.target.value as ReasoningEffort | "")}><option value="">跟随模型默认</option>{effortOptions.map((item) => <option key={item.value} value={item.value}>{item.label}（{item.value}）</option>)}</select><small>{draftEffort ? effortOptions.find((item) => item.value === draftEffort)?.description : "不同供应商和模型只显示它实际支持的档位。"}</small></label>}
-            {effortOptions.length === 0 && <div className="model-note">当前模型没有可配置的思考程度，将使用供应商默认行为。</div>}
-            {draftProviderId && <button type="button" className="refresh-models" onClick={() => setRefreshKey((current) => current + 1)} disabled={loading}><RefreshCw size={13} className={loading ? "spin" : ""} /> 从供应商 /models 重新获取</button>}
-            {providerWillChange && <div className="model-note">供应商与当前会话不同：普通发送会创建新会话；在历史回复旁点“重新生成”可明确选择该供应商，并留在当前会话。</div>}
-            <button className="primary-button apply-model" disabled={!draftModel.trim() && Boolean(draftProviderId)} onClick={async () => { await onSelect(draftProviderId, draftModel.trim(), draftEffort); onOpenChange(false); }}><Check size={16} /> 使用这个模型</button>
-
-            <form className="quick-token" onSubmit={(event) => { event.preventDefault(); void saveToken(); }}>
-              <div><KeyRound size={15} /><span><strong>直接设置 API 令牌</strong><small>{provider ? `更新 ${provider.name} 的令牌` : "连接 OpenAI API Key"}</small></span></div>
-              <input className="sr-only" name="username" autoComplete="username" value={provider?.name || "OpenAI"} readOnly tabIndex={-1} aria-hidden="true" />
-              <div className="quick-token-row"><input name="apiKey" type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder={provider?.apiKeyHint || "粘贴 API Key"} autoComplete="new-password" /><button type="submit" className="secondary-button compact" disabled={!token.trim() || savingToken}>{savingToken ? "保存中" : "保存"}</button></div>
-            </form>
-            {notice && <div className="model-picker-notice">{notice}</div>}
-            {error && <div className="form-error">{error}</div>}
-            <button className="advanced-settings" onClick={() => { onOpenChange(false); onAdvancedSettings(); }}><Settings2 size={14} /> 添加第三方 API、代理或高级请求头</button>
-          </div>
-        </section>
-      </>}
+      {picker}
     </div>
   );
 }
