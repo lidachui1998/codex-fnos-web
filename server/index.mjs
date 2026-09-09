@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { createApiHandler } from "./api-router.mjs";
 import { AccountService, resolveCodexAccountHome } from "./account-service.mjs";
 import { AppServerBridge } from "./app-server-bridge.mjs";
+import { RuntimeService } from "./runtime-service.mjs";
 import { AppearanceService } from "./appearance-service.mjs";
 import { CodexUpdater } from "./codex-updater.mjs";
 import { ConversationService } from "./conversation-service.mjs";
@@ -168,7 +169,8 @@ function queueBridgeRestart() {
   restartTimer = setTimeout(restartWhenIdle, 400);
 }
 
-const handleApi = createApiHandler({ stores, bridge, accounts, queueBridgeRestart, appearance, updater, workspace, knowledge, skills, extensions, pets, schedules, notifications, subagentJoins, outbox });
+const runtime = new RuntimeService(bridge);
+const handleApi = createApiHandler({ stores, bridge, runtime, accounts, queueBridgeRestart, appearance, updater, workspace, knowledge, skills, extensions, pets, schedules, notifications, subagentJoins, outbox });
 const loginFailures = new Map();
 const loginWindowMs = 5 * 60 * 1000;
 const maxLoginFailures = 5;
@@ -310,6 +312,8 @@ server.listen(port, host, () => {
 });
 
 async function shutdown() {
+  runtime.close();
+  clearTimeout(restartTimer);
   outbox.close();
   subagentJoins.close();
   schedules.close();

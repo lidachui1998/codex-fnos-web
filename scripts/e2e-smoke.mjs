@@ -536,6 +536,16 @@ try {
   assert.equal(restartedResume.reasoningEffort, "high", "reasoning effort must survive an app restart");
   assert.equal(restartedResume.approvalPolicy, "on-request", "per-thread approval policy must survive an app restart");
   assert.equal(restartedResume.networkAccess, true, "per-thread network access must survive an app restart");
+  const runtimeStatus = await request(appBaseUrl, restartedCookie, "/api/bridge/status");
+  assert.equal(runtimeStatus.bridge.status, "ready");
+  const mcpInventory = await request(appBaseUrl, restartedCookie, "/api/mcp/status");
+  assert.ok(mcpInventory.data.some((server) => server.name === "fnos_schedule" && server.tools.includes("create_new_conversation")), "official MCP inventory must include built-in tools");
+  await request(appBaseUrl, restartedCookie, "/api/mcp/reload", { method: "POST", body: "{}" });
+  const manualRestart = await request(appBaseUrl, restartedCookie, "/api/bridge/restart", { method: "POST", body: "{}" });
+  assert.equal(manualRestart.bridge.status, "ready");
+  assert.notEqual(manualRestart.bridge.pid, runtimeStatus.bridge.pid, "manual restart must replace the actual Codex process");
+  const afterManualRestart = await request(appBaseUrl, restartedCookie, `/api/threads/${threadId}`);
+  assert.ok(afterManualRestart.thread.turns.length > 0, "manual restart must preserve the conversation history");
   let threadDelete = false;
   if (process.env.E2E_SERVE_UI !== "1") {
     const sourceTurnId = restartedResume.thread.turns?.[0]?.id;
@@ -582,6 +592,8 @@ try {
     visibleTurnErrors: true,
     persistedHistory: true,
     historyAfterRestart: true,
+    manualCoreRestart: true,
+    mcpInventoryAndReload: true,
     threadManagement: true,
     globalSearch: true,
     editBranch: true,

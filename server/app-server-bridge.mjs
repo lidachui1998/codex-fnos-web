@@ -59,9 +59,10 @@ export function codexRuntimeConfig(modelReasoningEffort) {
 }
 
 export class AppServerBridge extends EventEmitter {
-  constructor({ codexBin, codexHome, databasePath, gatewayBaseUrl, gatewayToken, stores }) {
+  constructor({ codexBin, codexHome, databasePath, gatewayBaseUrl, gatewayToken, stores, spawnProcess = spawn }) {
     super();
     this.codexBin = codexBin;
+    this.spawnProcess = spawnProcess;
     this.codexHome = codexHome;
     this.databasePath = databasePath;
     this.gatewayBaseUrl = gatewayBaseUrl;
@@ -74,6 +75,8 @@ export class AppServerBridge extends EventEmitter {
     this.activeTurns = new Set();
     this.state = { status: "stopped", error: null, pid: null };
     this.startPromise = null;
+    this.stopPromise = null;
+    this.restartPromise = null;
   }
 
   snapshot() {
@@ -104,11 +107,15 @@ export class AppServerBridge extends EventEmitter {
   }
 
   async start() {
+    if (this.stopPromise) await this.stopPromise;
     if (this.state.status === "ready") return;
     if (this.startPromise) return this.startPromise;
     this.startPromise = this.#start();
     try {
       await this.startPromise;
+    } catch (error) {
+      this.#setState({ status: "error", error: error.message, pid: null });
+      throw error;
     } finally {
       this.startPromise = null;
     }
@@ -118,7 +125,7 @@ export class AppServerBridge extends EventEmitter {
     this.#writeConfig();
     this.#setState({ status: "starting", error: null, pid: null });
     await new Promise((resolve, reject) => {
-      const child = spawn(this.codexBin, ["app-server", "--listen", "stdio://"], {
+      const child = this.spawnProcess(this.codexBin, ["app-server", "--listen", "stdio://"], {
         cwd: this.codexHome,
         env: {
           ...this.#cleanProcessEnvironment(),
@@ -138,22 +145,27 @@ export class AppServerBridge extends EventEmitter {
       }, 10_000);
       const fail = (error) => {
         clearTimeout(spawnTimer);
+        if (settled) return;
+        settled = true;
+        if (!child.pid && this.child === child) this.child = null;
+        else child.kill();
         this.#setState({ status: "error", error: error.message, pid: null });
-        if (!settled) {
-          settled = true;
-          reject(error);
-        }
+        reject(error);
       };
       child.once("error", fail);
+      child.stdin.on("error", (error) => {
+        if (!settled) fail(error);
+      });
       child.once("spawn", async () => {
         clearTimeout(spawnTimer);
         this.#setState({ status: "initializing", error: null, pid: child.pid });
         this.#consumeOutput(child);
         try {
           await this.request("initialize", {
-            clientInfo: { name: "codex-fnos-web", title: "Codex fnOS Web", version: "0.11.1" },
+            clientInfo: { name: "codex-fnos-web", title: "Codex fnOS Web", version: "0.11.2" },
             capabilities: { experimentalApi: true },
-          }, { requireReady: false });
+          }, { requireReady: false, timeoutMs: 20_000 });
+          if (settled || this.child !== child || this.state.status === "stopping") return;
           this.notify("initialized", {});
           this.#setState({ status: "ready", error: null, pid: child.pid });
           settled = true;
@@ -163,6 +175,8 @@ export class AppServerBridge extends EventEmitter {
         }
       });
       child.once("exit", (code, signal) => {
+        clearTimeout(spawnTimer);
+        if (this.child !== child) return;
         this.child = null;
         this.activeTurns.clear();
         for (const { reject: rejectPending } of this.pending.values()) {
@@ -170,6 +184,10 @@ export class AppServerBridge extends EventEmitter {
         }
         this.pending.clear();
         const expected = this.state.status === "stopping";
+        if (!settled) {
+          settled = true;
+          reject(new Error(`Codex app-server 在初始化完成前退出 (${code ?? signal ?? "unknown"})`));
+        }
         this.#setState({
           status: expected ? "stopped" : "error",
           error: expected ? null : `Codex app-server 已退出 (${code ?? signal ?? "unknown"})`,
@@ -180,22 +198,33 @@ export class AppServerBridge extends EventEmitter {
   }
 
   async restart() {
-    await this.stop();
-    return this.start();
+    if (this.restartPromise) return this.restartPromise;
+    this.restartPromise = (async () => { await this.stop(); await this.start(); })();
+    try { await this.restartPromise; }
+    finally { this.restartPromise = null; }
   }
 
   async stop() {
+    if (this.stopPromise) return this.stopPromise;
     if (!this.child) return;
     this.#setState({ status: "stopping", error: null, pid: this.child.pid });
     const child = this.child;
-    await new Promise((resolve) => {
-      const timer = setTimeout(() => child.kill(), 3000);
+    this.stopPromise = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => child.kill("SIGKILL"), 3000);
+      const deadline = setTimeout(() => {
+        reject(new Error("Codex 进程未能停止，请检查 NAS 进程状态"));
+      }, 6000);
       child.once("exit", () => {
         clearTimeout(timer);
+        clearTimeout(deadline);
         resolve();
       });
       child.kill("SIGTERM");
     });
+    try {
+      await this.stopPromise;
+      await this.startPromise?.catch(() => {});
+    } finally { this.stopPromise = null; }
   }
 
   request(method, params = {}, options = {}) {
@@ -204,7 +233,6 @@ export class AppServerBridge extends EventEmitter {
     }
     const id = this.nextId++;
     const message = params === undefined ? { id, method } : { id, method, params };
-    this.child.stdin.write(`${JSON.stringify(message)}\n`);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
@@ -220,6 +248,14 @@ export class AppServerBridge extends EventEmitter {
           reject(error);
         },
       });
+      const failWrite = (error) => {
+        if (!error) return;
+        const pending = this.pending.get(id);
+        this.pending.delete(id);
+        pending?.reject(error);
+      };
+      try { this.child.stdin.write(`${JSON.stringify(message)}\n`, failWrite); }
+      catch (error) { failWrite(error); }
     });
   }
 

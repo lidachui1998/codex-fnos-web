@@ -5,10 +5,10 @@
   <p>原生飞牛桌面体验 · 实时对话控制 · 后台定时任务 · Codex 宠物 · Skills 与插件 · 多模型供应商</p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-0.11.1-0f9f7f?style=flat-square" alt="Version 0.11.1">
+    <img src="https://img.shields.io/badge/version-0.11.2-0f9f7f?style=flat-square" alt="Version 0.11.2">
     <img src="https://img.shields.io/badge/fnOS-x86__64-1f2937?style=flat-square" alt="fnOS x86_64">
     <img src="https://img.shields.io/badge/Node.js-24%2B-3c873a?style=flat-square" alt="Node.js 24+">
-    <img src="https://img.shields.io/badge/tests-104%20passed-0f9f7f?style=flat-square" alt="104 tests passed">
+    <img src="https://img.shields.io/badge/tests-118%20passed-0f9f7f?style=flat-square" alt="118 tests passed">
   </p>
 
   <p>
@@ -40,7 +40,7 @@ Codex 飞牛工作台把这些环节放进同一个 fnOS 应用：
 
 ## 核心能力
 
-| 能力 | 0.11.1 中的实现 |
+| 能力 | 0.11.2 中的实现 |
 | --- | --- |
 | 实时对话控制 | 流式回答、中断、官方 `turn/steer` 立即追加；等待队列持久化在 NAS，关闭页面后仍会自动续发，也可手动提前发送 |
 | 飞牛 App 兼容 | 标准 SSE 实时通道；嵌入式 WebView 自动降级为 Fetch 长轮询，断网、回前台与服务重启后自动重连并同步当前会话 |
@@ -53,6 +53,7 @@ Codex 飞牛工作台把这些环节放进同一个 fnOS 应用：
 | NAS 文件工作流 | 项目文件、Git diff 与常见产物预览；调用官方 `openFile` / `openFileManager` 打开或定位文件，宿主失联和超时会给出可操作诊断 |
 | 网页检索溯源 | `webSearch` 展示搜索词、来源标题、网址、抓取时间与引用片段；回答中的来源卡片和 Markdown 引用可直接打开原网页 |
 | Skills 与插件 | 搜索、预览、智能调用、`@` 强制指定；支持 GitHub、`SKILL.md`、ZIP 与标准插件包导入 |
+| 服务与 MCP 诊断 | 手动重启 Codex 后台、启动失败有限自动恢复；检查当前会话实际加载的 MCP 工具与资源，按官方接口重载配置，失败时展示真实错误与处理提示 |
 | 模型与账号 | OpenAI / ChatGPT 设备码或 API Key 登录，多账号隔离；第三方 Responses 与 Chat Completions 自动适配 |
 | 网络与代理 | 新会话默认允许命令联网，可逐会话关闭；HTTP、HTTPS、SOCKS5 合并配置，供应商可继承、指定或直连 |
 | 通知与交付 | fnOS 工作台通知中心、飞书 V2 机器人、Hermes 微信 Webhook，按事件启停并保留准确状态 |
@@ -111,7 +112,7 @@ Skills 可以允许 Codex 智能调用，也可以在聊天框中通过 `@` 明�
 
 ### 安装 FPK
 
-1. 从 [最新 Release](https://github.com/lidachui1998/codex-fnos-web/releases/latest) 下载 `com.lidachui.codexweb-0.11.1-x86_64.fpk`。
+1. 从 [最新 Release](https://github.com/lidachui1998/codex-fnos-web/releases/latest) 下载 `com.lidachui.codexweb-0.11.2-x86_64.fpk`。
 2. 在 fnOS 应用中心选择手动安装，并上传 FPK。
 3. 打开“Codex 飞牛工作台”，首次使用时设置工作台访问密码。
 4. 登录 OpenAI / ChatGPT，或在设置中添加第三方模型供应商。
@@ -120,7 +121,7 @@ Skills 可以允许 Codex 智能调用，也可以在聊天框中通过 `@` 明�
 安装包 SHA-256：
 
 ```text
-C2F4AF3A8208C26601F4483DA62A16E9740ECE5CA75A06B95F6DF707C3B4DE37
+50A430201B96DABA1CD623A0A258A188616AC98D97E3042BCAD564E608A1A07E
 ```
 
 > [!TIP]
@@ -132,6 +133,15 @@ C2F4AF3A8208C26601F4483DA62A16E9740ECE5CA75A06B95F6DF707C3B4DE37
 - “使用飞牛打开”和“在文件管理器中定位”分别调用官方 `openFile`、`openFileManager`，不猜测桌面私有 URL 或内部消息协议。
 - 通过 fnOS iframe 在当前桌面窗口打开；统一网关可复用 NAS 与 FN Connect 入口的登录态。
 - 生命周期会探测飞牛 Docker CLI 并加入 Codex 的 `PATH`。任意控制宿主 Docker 套接字接近 root 权限，因此安装包不会默认静默开放。
+
+### 0.11.2：更容易定位问题与恢复服务
+
+- **设置 → 服务与 MCP**：查看后台状态、进程与执行任务数，手动重启核心；有任务时先确认中断，重启保留会话和设置。启动失败自动恢复最多 3 次，避免无限重启。
+- **MCP 真实状态**：检查已加载的工具、资源和模板；重载使用官方接口，在会话下一轮重新连接。`unknown MCP server` 表示服务未被该会话加载，重载不会替你创建缺失的服务配置。
+- **文件管理器重连**：初始化失联后可点击“重新连接飞牛”，重新建立官方 SDK 连接；不会重放过期的打开请求。独立浏览器页面无法直接调用 fnOS 桌面文件管理器，请从飞牛桌面应用入口打开。
+- **更清楚的界面**：统一设置卡片、工具错误信息与文件操作样式；修复连接提示挤占文件预览的大块空白，改善手机端按钮尺寸和间距，保留现有主题与背景设置。
+
+飞牛宿主要求见[官方调用说明](https://developer.fnnas.com/api/calling/)和[文件路由接口](https://developer.fnnas.com/api/page/routing/)。真实 NAS 宿主打开效果仍需安装新 FPK 后验证；本地测试覆盖成功、超时、迟到回执和重新连接。
 
 ## 架构
 

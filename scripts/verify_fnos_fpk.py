@@ -131,10 +131,24 @@ with tarfile.open(fileobj=io.BytesIO(package_bytes), mode="r:gz") as package:
             "editable file versions": b"file_versions",
             "account pet settings": b"pet-settings.json",
             "pet import API": b"/api/pets/import",
+            "manual core restart": b"/api/bridge/restart",
+            "runtime recovery status": b"/api/bridge/status",
+            "MCP inventory": b"mcpServerStatus/list",
+            "MCP configuration reload": b"config/mcpServer/reload",
         }
         missing_server_markers = [label for label, marker in server_markers.items() if marker not in server_bytes]
         if missing_server_markers:
             raise SystemExit(f"Bundled server is missing runtime markers: {missing_server_markers}")
+
+        sdk_assets = []
+        for name in app_names:
+            if name.startswith("server/dist/assets/") and name.endswith(".js"):
+                source = app.extractfile(name)
+                content = source.read() if source else b""
+                if b"openFileManager" in content and b"TrimApp" in content:
+                    sdk_assets.append(name)
+        if not sdk_assets:
+            raise SystemExit("Official fnOS SDK asset is missing from the application")
 
         schedule_mcp_source = app.extractfile("server/server/schedule-mcp.mjs")
         schedule_mcp_bytes = schedule_mcp_source.read() if schedule_mcp_source else b""

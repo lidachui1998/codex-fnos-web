@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "../api";
-import { openFnosFile, openFnosFileManager, projectAbsolutePath } from "../fnos-sdk";
+import { openFnosFile, openFnosFileManager, projectAbsolutePath, reconnectFnosHost } from "../fnos-sdk";
 import type { Project, ThreadItem } from "../types";
 import { DiffView, normalizedChangeKind } from "./DiffView";
 
@@ -83,6 +83,7 @@ export function WorkspacePanel({ project, items, requestedFile, onClose, onConti
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [fnosOpening, setFnosOpening] = useState(false);
+  const [fnosFailed, setFnosFailed] = useState(false);
   const [error, setError] = useState("");
   const [copiedPath, setCopiedPath] = useState(false);
   const [notice, setNotice] = useState("");
@@ -290,6 +291,7 @@ export function WorkspacePanel({ project, items, requestedFile, onClose, onConti
   async function openWithFnos(path: string, containingFolder = false) {
     const absolutePath = projectAbsolutePath(project, cleanFileReference(path));
     setFnosOpening(true);
+    setFnosFailed(false);
     setError("");
     setNotice(containingFolder ? "正在连接飞牛文件管理器…" : "正在请求飞牛打开文件…");
     try {
@@ -303,6 +305,7 @@ export function WorkspacePanel({ project, items, requestedFile, onClose, onConti
       }
     } catch (reason) {
       setNotice("");
+      setFnosFailed(true);
       setError(reason instanceof Error ? reason.message : "无法调用飞牛文件管理器");
     } finally {
       setFnosOpening(false);
@@ -358,6 +361,12 @@ export function WorkspacePanel({ project, items, requestedFile, onClose, onConti
     <header><div><Code2 size={17} /><span><strong>项目与产物</strong><small>{project.name}</small></span></div><button className="icon-button small" onClick={onClose} aria-label="关闭项目文件"><X size={17} /></button></header>
     <div className="inspector-tabs"><button className={tab === "changes" ? "active" : ""} onClick={() => { setTab("changes"); void loadChanges(); }}><FileDiff size={14} /> 改动 <em>{changes.length}</em></button><button className={tab === "files" ? "active" : ""} onClick={() => { setTab("files"); void loadFiles(""); }}><Folder size={14} /> 文件</button><button className={tab === "artifacts" ? "active" : ""} onClick={() => { setTab("artifacts"); void loadArtifacts(); }}><PackageOpen size={14} /> 产物 <em>{artifacts.length}</em></button><button className={tab === "knowledge" ? "active" : ""} onClick={() => setTab("knowledge")}><BookOpen size={14} /> 知识</button><button className="icon-button small" onClick={() => void (tab === "changes" ? loadChanges() : tab === "files" ? loadFiles() : tab === "artifacts" ? loadArtifacts() : loadKnowledge())} aria-label="刷新"><RefreshCw size={14} className={loading || knowledgeBusy ? "spin" : ""} /></button></div>
     {error && <div className="inspector-error">{error}</div>}
+    {fnosFailed && <div className="inspector-note"><button className="secondary-button compact" disabled={fnosOpening} onClick={async () => {
+      setFnosOpening(true); setError(""); setNotice("正在重新连接飞牛…");
+      try { await reconnectFnosHost(); setFnosFailed(false); setNotice("已重新连接飞牛，请再次点击打开文件或所在目录。"); }
+      catch (reason) { setNotice(""); setError(reason instanceof Error ? reason.message : String(reason)); }
+      finally { setFnosOpening(false); }
+    }}><RefreshCw size={14} />重新连接飞牛</button><button className="secondary-button compact" onClick={() => void copyNasPath()}>复制文件路径</button></div>}
     {notice && <div className="inspector-note">{notice}</div>}
     {preview ? <div className="code-preview">
       <header>

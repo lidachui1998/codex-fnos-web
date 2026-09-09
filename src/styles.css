@@ -1403,6 +1403,63 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .pet-companion { z-index: 32; }
 }
 
+.runtime-card { padding: 20px; border: 1px solid var(--line); border-radius: 16px; display: grid; gap: 12px; min-width: 0; background: var(--surface-raised); box-shadow: 0 3px 14px color-mix(in srgb,var(--ink) 3%,transparent); }
+.runtime-card > strong { font-size: 16px; letter-spacing: -.02em; }
+.runtime-card .secondary-button { width: fit-content; min-height: 40px; }
+.runtime-card p, .runtime-card small { margin: 0; color: var(--muted); line-height: 1.6; }
+.runtime-card pre { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.runtime-card details { font-size: 12px; }
+.runtime-card summary { cursor: pointer; }
+.runtime-settings .setting-actions { flex-wrap: wrap; }
+.tool-failure { display: grid; gap: 6px; padding: 0 16px 12px; color: var(--red); font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.tool-failure > span { max-height: 5em; overflow: auto; }
+.tool-failure small { color: var(--muted); line-height: 1.6; }
+
+/* Status notices must not take the file preview's flexible row. */
+.workspace-inspector { display: flex; flex-direction: column; }
+.workspace-inspector > header { min-height: 68px; flex-shrink: 0; }
+.workspace-inspector > .inspector-tabs { flex-shrink: 0; padding: 10px; gap: 5px; }
+.workspace-inspector > .code-preview, .workspace-inspector > .inspector-list { flex: 1; min-height: 0; }
+.workspace-inspector > .inspector-note, .workspace-inspector > .inspector-error { flex-shrink: 0; max-height: 160px; overflow: auto; margin: 8px 10px 0; padding: 12px 14px; font-size: 12px; border-radius: 12px; }
+.workspace-inspector > .inspector-note:has(button) { display: flex; flex-wrap: wrap; gap: 8px; }
+.inspector-tabs > button:not(.icon-button) { min-height: 38px; font-size: 11px; }
+.inspector-tabs > button.active { color: var(--accent-dark); background: var(--accent-soft); }
+.inspector-list { padding: 10px; }
+.inspector-list > button { min-height: 54px; padding: 10px; border-radius: 11px; }
+.inspector-list strong { font-size: 12px; font-weight: 550; }
+.inspector-list small { font-size: 10px; }
+.workspace-inspector > header strong { font-size: 14px; }
+.workspace-inspector > header small { font-size: 10px; }
+.preview-icon-button { min-width: 34px; min-height: 34px; }
+.preview-mode-button { min-height: 34px; }
+.settings-nav { padding: 16px 10px; }
+.settings-nav button { min-height: 43px; font-size: 12px; border-radius: 10px; margin-bottom: 3px; }
+.settings-nav button.active { color: var(--accent-dark); background: var(--accent-soft); box-shadow: none; }
+.settings-content { padding: 26px; }
+.settings-content .section-heading h3 { font-size: 18px; letter-spacing: -.025em; }
+.settings-content .section-heading p { font-size: 12px; line-height: 1.7; }
+.settings-row { padding: 12px; border-radius: 13px; }
+.settings-row-main strong { font-size: 13px; }
+.settings-row-main span { font-size: 11px; }
+.settings-row-main small { font-size: 10px; color: var(--muted); }
+.tool-item { border-radius: 13px; }
+.tool-summary { min-height: 48px; padding: 10px 13px; }
+.tool-summary > span { font-size: 12px; }
+.tool-summary > b { font-size: 9px; background: transparent; padding-inline: 0; }
+.tool-summary:hover { background: color-mix(in srgb,var(--ink) 3%,transparent); }
+@media (max-width: 860px) {
+  .settings-content { padding: 17px 14px; }
+  .settings-nav { padding: 8px; }
+  .settings-nav button { min-height: 42px; white-space: nowrap; margin: 0; }
+  .runtime-card { padding: 16px; }
+  .runtime-card .secondary-button, .runtime-settings .setting-actions button { min-height: 44px; }
+  .preview-icon-button, .preview-mode-button { min-height: 40px; min-width: 40px; }
+  .tool-summary { min-height: 46px; gap: 6px; padding: 9px 10px; }
+  .tool-summary > span { font-size: 11px; }
+  .tool-failure { font-size: 11px; padding-inline: 12px; }
+  .workspace-inspector > header { min-height: 59px; }
+}
+
 /* Mobile controls are an action sheet. The model dialog is portaled to body so
    it cannot be clipped or covered by the header tools menu. */
 @media (max-width: 860px) {

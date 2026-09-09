@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ThreadItem } from "../types";
+import { toolDetail, toolFailure } from "../tool-diagnostics";
 import { changeKindName, DiffView } from "./DiffView";
 
 function workspaceFileHref(href: string | undefined, projectPath: string) {
@@ -110,6 +111,7 @@ function WebSources({ sources, compact = false }: { sources: WebSource[]; compac
 }
 
 function toolStatus(item: ThreadItem) {
+  if (toolFailure(item)) return { label: "失败", icon: <AlertTriangle size={14} /> };
   if (item.status === "completed") return { label: "完成", icon: <CheckCircle2 size={14} /> };
   if (["failed", "declined"].includes(item.status ?? "")) return { label: item.status === "declined" ? "已拒绝" : "失败", icon: <AlertTriangle size={14} /> };
   return { label: "执行中", icon: <LoaderCircle size={14} /> };
@@ -134,8 +136,9 @@ function ToolItem({ item }: { item: ThreadItem }) {
           : `${item.server ? `${item.server} · ` : ""}${item.tool ?? item.type}`;
   const detail = isCommand
     ? item.aggregatedOutput
-    : item.progress || JSON.stringify(item.result ?? item.arguments ?? item.error ?? {}, null, 2);
+    : toolDetail(item);
   const status = toolStatus(item);
+  const failure = toolFailure(item);
 
   useEffect(() => {
     if (item.status === "inProgress" && (item.aggregatedOutput || item.progress)) setOpen(true);
@@ -144,15 +147,16 @@ function ToolItem({ item }: { item: ThreadItem }) {
   }, [item.aggregatedOutput, item.progress, item.status]);
 
   return (
-    <article className={`tool-item ${item.status ?? "inProgress"}`}>
+    <article className={`tool-item ${failure ? "failed" : item.status ?? "inProgress"}`}>
       <button className="tool-summary" onClick={() => setOpen(!open)}>
         <Icon size={16} />
         <b>{kind}</b>
         <span>{title || "正在执行工具"}</span>
-        <em className={`status-dot ${item.status ?? "inProgress"}`}>{status.icon}<i>{status.label}</i></em>
+        <em className={`status-dot ${failure ? "failed" : item.status ?? "inProgress"}`}>{status.icon}<i>{status.label}</i></em>
         {Number.isFinite(item.durationMs) && <small className="tool-duration"><Clock3 size={11} />{durationText(Number(item.durationMs))}</small>}
         {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
       </button>
+      {failure && <div className="tool-failure"><span>{failure.message}</span>{failure.hint && <small>{failure.hint}</small>}</div>}
       {open && (isFile
         ? <div className="tool-detail file-change-detail">{item.changes?.map((change, index) => <section key={`${change.path}-${index}`}><header><strong>{changeKindName(change.kind)}</strong><span>{change.path}</span></header><DiffView value={change.diff || "暂无 Diff 内容"} /></section>)}</div>
         : isSearch && webSearchSources(item).length > 0

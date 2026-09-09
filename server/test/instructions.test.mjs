@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { composeDeveloperInstructions, defaultFnosInstructions } from "../instructions.mjs";
 
+const mcpSection = "## MCP 调用\n\n只使用本轮实际提供的 MCP 服务名和工具名；不要根据历史记录猜测服务名或 URI。搜索应调用实际提供的搜索工具，资源只能读取已列出的 URI。遇到 unknown MCP server 或 method not found 时，停止重复调用该服务或接口，说明未加载或不支持的具体原因，并使用现有可用工具继续。";
+
 test("composes fnOS, personal, and project instructions in stable order", () => {
   assert.equal(composeDeveloperInstructions({
     fnosInstructionsEnabled: true,
@@ -17,7 +19,7 @@ Personal rules
 
 ## 当前项目指令
 
-Project rules`);
+Project rules\n\n${mcpSection}`);
 });
 
 test("the default environment prompt identifies fnOS and destructive-operation safeguards", () => {
@@ -34,5 +36,5 @@ test("disabled fnOS instructions are omitted", () => {
     fnosInstructionsEnabled: false,
     fnosInstructions: "NAS rules",
     personalInstructions: "Personal rules",
-  }), "## 个人指令\n\nPersonal rules");
+  }), `## 个人指令\n\nPersonal rules\n\n${mcpSection}`);
 });

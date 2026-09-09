@@ -7,12 +7,14 @@ import { ModelCombobox } from "./ModelCombobox";
 import { Modal } from "./Modal";
 import { NotificationSettings } from "./NotificationSettings";
 import { PersonalizationSettings } from "./PersonalizationSettings";
+import { RuntimeSettings } from "./RuntimeSettings";
 
 type Props = {
   open: boolean;
   bootstrap: Bootstrap;
   onClose: () => void;
   onChanged: () => Promise<void>;
+  threadId?: string;
 };
 
 type ProviderForm = {
@@ -135,8 +137,8 @@ function usageState(snapshot: RateLimitSnapshot, window: RateLimitWindow) {
   return { usedPercent, label: `官方已用 ${usedPercent}% · 剩余 ${Math.max(0, 100 - usedPercent)}%` };
 }
 
-export function SettingsDialog({ open, bootstrap, onClose, onChanged }: Props) {
-  const [tab, setTab] = useState<"providers" | "proxies" | "permissions" | "notifications" | "personalization" | "appearance" | "updates" | "account">("providers");
+export function SettingsDialog({ open, bootstrap, onClose, onChanged, threadId }: Props) {
+  const [tab, setTab] = useState<"providers" | "proxies" | "permissions" | "notifications" | "personalization" | "appearance" | "updates" | "account" | "runtime">("providers");
   const [providerForm, setProviderForm] = useState(emptyProvider);
   const [proxyForm, setProxyForm] = useState(emptyProxy);
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
@@ -342,6 +344,7 @@ export function SettingsDialog({ open, bootstrap, onClose, onChanged }: Props) {
     <Modal open={open} onClose={onClose} title="工作台设置" subtitle="模型、代理和账户都保存在这台飞牛设备上。" wide>
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="设置分类">
+          <button className={tab === "runtime" ? "active" : ""} onClick={() => setTab("runtime")}><PlugZap size={17} /> 服务与 MCP</button>
           <button className={tab === "providers" ? "active" : ""} onClick={() => setTab("providers")}>
             <CloudCog size={17} /> 模型供应商
           </button>
@@ -369,6 +372,7 @@ export function SettingsDialog({ open, bootstrap, onClose, onChanged }: Props) {
         </nav>
 
         <section className="settings-content">
+          {tab === "runtime" && <RuntimeSettings key={threadId ?? "account"} onChanged={onChanged} threadId={threadId} />}
           {notice && <div className="success-banner"><CheckCircle2 size={16} /> {notice}</div>}
           {error && <div className="form-error">{error}</div>}
 

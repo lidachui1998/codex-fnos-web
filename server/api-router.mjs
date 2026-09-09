@@ -145,7 +145,7 @@ function publicCodexStatus(value) {
   return result;
 }
 
-export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart, appearance, updater, workspace, knowledge, skills, extensions, pets, schedules, notifications, subagentJoins = null, outbox = null }) {
+export function createApiHandler({ stores, bridge, runtime, accounts, queueBridgeRestart, appearance, updater, workspace, knowledge, skills, extensions, pets, schedules, notifications, subagentJoins = null, outbox = null }) {
   const findProject = (id) => stores.listProjects().find((item) => item.id === id);
   const findProvider = (id) => stores.listProviders().find((item) => item.id === id);
   const decorateThread = (thread, extra = {}) => {
@@ -195,7 +195,7 @@ export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart,
         }
       }
       sendJson(res, 200, {
-        version: "0.11.1",
+        version: "0.11.2",
         providers: stores.listProviders(),
         proxies: stores.listProxies(),
         projects: stores.listProjects(),
@@ -1225,8 +1225,20 @@ export function createApiHandler({ stores, bridge, accounts, queueBridgeRestart,
       return;
     }
     if (req.method === "POST" && pathname === "/api/bridge/restart") {
-      await bridge.restart();
-      sendJson(res, 200, { bridge: bridge.snapshot() });
+      const input = await readJson(req);
+      sendJson(res, 200, await runtime.restart({ force: input.force === true }));
+      return;
+    }
+    if (req.method === "GET" && pathname === "/api/bridge/status") {
+      sendJson(res, 200, runtime.snapshot());
+      return;
+    }
+    if (req.method === "GET" && pathname === "/api/mcp/status") {
+      sendJson(res, 200, await runtime.mcpStatus(searchParams.get("threadId")));
+      return;
+    }
+    if (req.method === "POST" && pathname === "/api/mcp/reload") {
+      sendJson(res, 200, await runtime.reloadMcp());
       return;
     }
 

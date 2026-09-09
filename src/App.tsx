@@ -774,7 +774,7 @@ export default function App() {
     }
     if (event.kind === "bridge_state") {
       setBootstrap((current) => current ? { ...current, bridge: event.state } : current);
-      if (event.state.status === "ready") void loadBootstrap();
+      if (event.state.status === "ready") { void loadBootstrap(); void resyncSelectedThread(); }
       return;
     }
     if (event.kind === "bridge_error") {
@@ -1997,7 +1997,7 @@ export default function App() {
         {workspacePanel && selectedProject && <WorkspacePanel project={selectedProject} items={items} requestedFile={workspaceFileRequest} onClose={() => setWorkspacePanel(false)} onContinueWithCodex={continueWorkspaceFile} onAskKnowledge={askProjectKnowledge} />}
         {projectDialog && <ProjectDialog open bootstrap={bootstrap} onClose={() => setProjectDialog(false)} onCreated={loadBootstrap} />}
         {globalSearchOpen && <GlobalSearchDialog open onClose={() => setGlobalSearchOpen(false)} onSelect={selectSearchResult} />}
-        {settingsDialog && <SettingsDialog open bootstrap={bootstrap} onClose={() => setSettingsDialog(false)} onChanged={loadBootstrap} />}
+        {settingsDialog && <SettingsDialog open bootstrap={bootstrap} threadId={selectedThread?.id} onClose={() => setSettingsDialog(false)} onChanged={loadBootstrap} />}
         {skillsDialog && <SkillsDialog open project={selectedProject} revision={skillsRevision} onSkillsChange={updateAvailableSkills} onClose={() => setSkillsDialog(false)} />}
         {pluginsDialog && <PluginsDialog open onClose={() => { setPluginsDialog(false); pluginsLoadedRef.current = false; }} />}
         {petCenterDialog && <PetCenterDialog open status={bootstrap.pets} onClose={() => setPetCenterDialog(false)} onChanged={(pets) => setBootstrap((current) => current ? { ...current, pets } : current)} />}
