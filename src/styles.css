@@ -1414,6 +1414,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-failure { display: grid; gap: 6px; padding: 0 16px 12px; color: var(--red); font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .tool-failure > span { max-height: 5em; overflow: auto; }
 .tool-failure small { color: var(--muted); line-height: 1.6; }
+.command-context { display: grid; gap: 7px; padding: 12px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.command-context pre { margin: 0; max-height: 180px; overflow: auto; white-space: pre-wrap; color: var(--ink); }
 
 /* Status notices must not take the file preview's flexible row. */
 .workspace-inspector { display: flex; flex-direction: column; }

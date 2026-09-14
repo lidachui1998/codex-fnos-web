@@ -410,7 +410,7 @@ export function handleScheduleMcpRequest(store, message, extensions, conversatio
     return {
       protocolVersion: message.params?.protocolVersion || "2025-06-18",
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: "fnos-workbench", version: "0.11.2" },
+      serverInfo: { name: "fnos-workbench", version: "0.11.3" },
     };
   }
   if (message.method === "ping") return {};

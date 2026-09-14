@@ -162,7 +162,7 @@ export class AppServerBridge extends EventEmitter {
         this.#consumeOutput(child);
         try {
           await this.request("initialize", {
-            clientInfo: { name: "codex-fnos-web", title: "Codex fnOS Web", version: "0.11.2" },
+            clientInfo: { name: "codex-fnos-web", title: "Codex fnOS Web", version: "0.11.3" },
             capabilities: { experimentalApi: true },
           }, { requireReady: false, timeoutMs: 20_000 });
           if (settled || this.child !== child || this.state.status === "stopping") return;

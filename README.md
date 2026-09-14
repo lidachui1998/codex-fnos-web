@@ -5,10 +5,10 @@
   <p>原生飞牛桌面体验 · 实时对话控制 · 后台定时任务 · Codex 宠物 · Skills 与插件 · 多模型供应商</p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-0.11.2-0f9f7f?style=flat-square" alt="Version 0.11.2">
+    <img src="https://img.shields.io/badge/version-0.11.3-0f9f7f?style=flat-square" alt="Version 0.11.3">
     <img src="https://img.shields.io/badge/fnOS-x86__64-1f2937?style=flat-square" alt="fnOS x86_64">
     <img src="https://img.shields.io/badge/Node.js-24%2B-3c873a?style=flat-square" alt="Node.js 24+">
-    <img src="https://img.shields.io/badge/tests-118%20passed-0f9f7f?style=flat-square" alt="118 tests passed">
+    <img src="https://img.shields.io/badge/tests-126%20passed-0f9f7f?style=flat-square" alt="126 tests passed">
   </p>
 
   <p>
@@ -40,7 +40,7 @@ Codex 飞牛工作台把这些环节放进同一个 fnOS 应用：
 
 ## 核心能力
 
-| 能力 | 0.11.2 中的实现 |
+| 能力 | 0.11.3 中的实现 |
 | --- | --- |
 | 实时对话控制 | 流式回答、中断、官方 `turn/steer` 立即追加；等待队列持久化在 NAS，关闭页面后仍会自动续发，也可手动提前发送 |
 | 飞牛 App 兼容 | 标准 SSE 实时通道；嵌入式 WebView 自动降级为 Fetch 长轮询，断网、回前台与服务重启后自动重连并同步当前会话 |
@@ -112,7 +112,7 @@ Skills 可以允许 Codex 智能调用，也可以在聊天框中通过 `@` 明�
 
 ### 安装 FPK
 
-1. 从 [最新 Release](https://github.com/lidachui1998/codex-fnos-web/releases/latest) 下载 `com.lidachui.codexweb-0.11.2-x86_64.fpk`。
+1. 从 [最新 Release](https://github.com/lidachui1998/codex-fnos-web/releases/latest) 下载 `com.lidachui.codexweb-0.11.3-x86_64.fpk`。
 2. 在 fnOS 应用中心选择手动安装，并上传 FPK。
 3. 打开“Codex 飞牛工作台”，首次使用时设置工作台访问密码。
 4. 登录 OpenAI / ChatGPT，或在设置中添加第三方模型供应商。
@@ -121,7 +121,7 @@ Skills 可以允许 Codex 智能调用，也可以在聊天框中通过 `@` 明�
 安装包 SHA-256：
 
 ```text
-50A430201B96DABA1CD623A0A258A188616AC98D97E3042BCAD564E608A1A07E
+CE49D01073F54C84DE9B82B34D2009FDE332C14209E4291296399B96863DBF0E
 ```
 
 > [!TIP]
@@ -133,6 +133,13 @@ Skills 可以允许 Codex 智能调用，也可以在聊天框中通过 `@` 明�
 - “使用飞牛打开”和“在文件管理器中定位”分别调用官方 `openFile`、`openFileManager`，不猜测桌面私有 URL 或内部消息协议。
 - 通过 fnOS iframe 在当前桌面窗口打开；统一网关可复用 NAS 与 FN Connect 入口的登录态。
 - 生命周期会探测飞牛 Docker CLI 并加入 Codex 的 `PATH`。任意控制宿主 Docker 套接字接近 root 权限，因此安装包不会默认静默开放。
+
+### 0.11.3：命令失败不再隐藏具体原因
+
+- 命令诊断读取真实输出与退出码，优先展示末尾错误；文件不存在、缺少命令、权限和 Shell 语法错误与 MCP 错误分开处理。
+- 展开命令可查看工作目录、完整原始命令（保留换行）和完整已返回输出；诊断摘要有长度上限，不截断原始详情。
+- 不足一秒显示“不足 1 秒”，成功命令不会仅因为输出中出现 `error` 等文字而误报失败。
+- 应用级脚本查找规则要求先确认目录和实际文件名；不覆盖已保存的定时任务提示词、重试或渲染规则，也不自动创建缺失脚本。
 
 ### 0.11.2：更容易定位问题与恢复服务
 

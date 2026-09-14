@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ThreadItem } from "../types";
 import { toolDetail, toolFailure } from "../tool-diagnostics";
+import { durationText } from "../execution-duration";
 import { changeKindName, DiffView } from "./DiffView";
 
 function workspaceFileHref(href: string | undefined, projectPath: string) {
@@ -156,12 +157,14 @@ function ToolItem({ item }: { item: ThreadItem }) {
         {Number.isFinite(item.durationMs) && <small className="tool-duration"><Clock3 size={11} />{durationText(Number(item.durationMs))}</small>}
         {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
       </button>
-      {failure && <div className="tool-failure"><span>{failure.message}</span>{failure.hint && <small>{failure.hint}</small>}</div>}
+      {failure && <div className="tool-failure">{isCommand && <strong>命令失败 · {Number.isFinite(item.exitCode) ? `退出码 ${item.exitCode}` : "未提供退出码"}</strong>}<span>{failure.message}</span>{failure.hint && <small>{failure.hint}</small>}</div>}
       {open && (isFile
         ? <div className="tool-detail file-change-detail">{item.changes?.map((change, index) => <section key={`${change.path}-${index}`}><header><strong>{changeKindName(change.kind)}</strong><span>{change.path}</span></header><DiffView value={change.diff || "暂无 Diff 内容"} /></section>)}</div>
         : isSearch && webSearchSources(item).length > 0
           ? <div className="tool-detail web-search-detail"><WebSources sources={webSearchSources(item)} compact /></div>
-          : <pre className="tool-detail">{detail || (item.status === "inProgress" ? "正在等待输出…" : "暂无输出")}</pre>)}
+          : isCommand
+            ? <div className="command-detail"><div className="command-context"><span>工作目录：<code>{item.cwd || "未记录"}</code></span><span>退出码：{Number.isFinite(item.exitCode) ? item.exitCode : "未提供"}</span><span>原始命令</span><pre>{item.command || "未记录"}</pre></div><pre className="tool-detail">{detail || (item.status === "inProgress" ? "正在等待输出…" : "暂无输出")}</pre></div>
+            : <pre className="tool-detail">{detail || (item.status === "inProgress" ? "正在等待输出…" : "暂无输出")}</pre>)}
     </article>
   );
 }
@@ -232,17 +235,6 @@ export type RetryProviderOption = {
   name: string;
   model: string;
 };
-
-function durationText(durationMs: number) {
-  const seconds = Math.max(0, Math.round(durationMs / 1000));
-  if (seconds < 60) return `${seconds} 秒`;
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  if (minutes < 60) return remainingSeconds ? `${minutes} 分 ${remainingSeconds} 秒` : `${minutes} 分钟`;
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-  return remainingMinutes ? `${hours} 小时 ${remainingMinutes} 分` : `${hours} 小时`;
-}
 
 function itemDurationMs(item: ThreadItem) {
   if (Number.isFinite(item.turnDurationMs)) return Math.max(0, Number(item.turnDurationMs));
